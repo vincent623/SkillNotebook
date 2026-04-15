@@ -1,0 +1,5 @@
+{
+  "name": "interview-extractor-smoke",
+  "input": "Users say onboarding feels vague until they see a concrete outcome.",
+  "expects": ["insight", "evidence", "implication"]
+}

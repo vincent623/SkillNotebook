@@ -1,0 +1,15 @@
+{
+  "id": "pkg-meeting",
+  "name": "Meeting Actions Synthesizer",
+  "description": "Draft action-oriented next steps from raw meeting notes and fragments.",
+  "tags": ["meeting", "actions", "ops"],
+  "status": "draft",
+  "currentVersion": 0,
+  "lastEvalStatus": null,
+  "relatedSkills": [],
+  "bundleCandidates": [],
+  "createdAt": "2026-04-13T17:42:00Z",
+  "updatedAt": "2026-04-13T18:12:00Z",
+  "versions": [],
+  "evalReports": []
+}

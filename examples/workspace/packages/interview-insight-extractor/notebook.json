@@ -1,0 +1,63 @@
+{
+  "id": "pkg-interview",
+  "name": "Interview Insight Extractor",
+  "description": "Turn messy interview transcripts into structured user insights and tensions.",
+  "tags": ["research", "synthesis", "qualitative"],
+  "status": "validated",
+  "currentVersion": 3,
+  "lastEvalStatus": "usable",
+  "relatedSkills": ["persona-composer"],
+  "bundleCandidates": ["research-pipeline"],
+  "createdAt": "2026-04-10T09:00:00Z",
+  "updatedAt": "2026-04-13T17:58:00Z",
+  "versions": [
+    {
+      "id": "version-interview-v3",
+      "packageId": "pkg-interview",
+      "versionNumber": 3,
+      "note": "Sharper synthesis prompt and stronger evidence formatting.",
+      "snapshotPath": ".skill-notebook/snapshots/pkg-interview/v3",
+      "evalReportId": "eval-interview-v3",
+      "isPinned": true,
+      "createdAt": "2026-04-13T17:59:00Z"
+    },
+    {
+      "id": "version-interview-v2",
+      "packageId": "pkg-interview",
+      "versionNumber": 2,
+      "note": "Added interview patterns and refined tags.",
+      "snapshotPath": ".skill-notebook/snapshots/pkg-interview/v2",
+      "evalReportId": null,
+      "isPinned": false,
+      "createdAt": "2026-04-12T16:20:00Z"
+    }
+  ],
+  "evalReports": [
+    {
+      "id": "eval-interview-v3",
+      "packageId": "pkg-interview",
+      "completenessScore": 0.92,
+      "clarityScore": 0.88,
+      "executabilityScore": 0.9,
+      "overallStatus": "usable",
+      "suggestions": [
+        "Add one negative example for low-signal interviews.",
+        "Tighten the output schema for insight confidence."
+      ],
+      "details": {
+        "hasSkillMd": true,
+        "hasExamples": true,
+        "hasPrompts": true,
+        "hasScripts": false,
+        "inputDefined": true,
+        "outputDefined": true,
+        "boundariesClear": true,
+        "notes": [
+          "Prompt instructions are specific and grounded.",
+          "Example outputs already demonstrate a stable structure."
+        ]
+      },
+      "createdAt": "2026-04-13T17:58:00Z"
+    }
+  ]
+}

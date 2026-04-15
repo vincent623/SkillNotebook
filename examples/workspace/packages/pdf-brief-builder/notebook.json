@@ -1,0 +1,53 @@
+{
+  "id": "pkg-pdf",
+  "name": "PDF Brief Builder",
+  "description": "Clean a pile of PDFs and turn them into a concise brief with source anchors.",
+  "tags": ["pdf", "cleanup", "summary"],
+  "status": "needs_eval",
+  "currentVersion": 1,
+  "lastEvalStatus": "needs_improvement",
+  "relatedSkills": ["report-refiner"],
+  "bundleCandidates": [],
+  "createdAt": "2026-04-11T10:20:00Z",
+  "updatedAt": "2026-04-13T17:51:00Z",
+  "versions": [
+    {
+      "id": "version-pdf-v1",
+      "packageId": "pkg-pdf",
+      "versionNumber": 1,
+      "note": "Initial formal version after first eval pass.",
+      "snapshotPath": ".skill-notebook/snapshots/pkg-pdf/v1",
+      "evalReportId": "eval-pdf-v1",
+      "isPinned": false,
+      "createdAt": "2026-04-13T17:52:00Z"
+    }
+  ],
+  "evalReports": [
+    {
+      "id": "eval-pdf-v1",
+      "packageId": "pkg-pdf",
+      "completenessScore": 0.76,
+      "clarityScore": 0.69,
+      "executabilityScore": 0.71,
+      "overallStatus": "needs_improvement",
+      "suggestions": [
+        "Clarify the output contract for citation formatting.",
+        "Add a stronger example for multi-document merge behavior."
+      ],
+      "details": {
+        "hasSkillMd": true,
+        "hasExamples": true,
+        "hasPrompts": true,
+        "hasScripts": true,
+        "inputDefined": true,
+        "outputDefined": false,
+        "boundariesClear": false,
+        "notes": [
+          "The package is structurally complete.",
+          "The final brief schema is still underspecified."
+        ]
+      },
+      "createdAt": "2026-04-13T17:51:00Z"
+    }
+  ]
+}
