@@ -7,6 +7,11 @@ pub fn now_iso() -> String {
         .unwrap_or_else(|_| "2026-04-13T00:00:00Z".to_string())
 }
 
+pub fn parse_iso(value: &str) -> Result<OffsetDateTime, String> {
+    OffsetDateTime::parse(value, &Rfc3339)
+        .map_err(|error| format!("failed to parse timestamp `{}`: {}", value, error))
+}
+
 pub fn today_slug() -> String {
     let now = OffsetDateTime::now_utc();
     format!(

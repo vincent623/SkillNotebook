@@ -48,11 +48,7 @@ fn copy_directory_filtered(source: &Path, destination: &Path) -> Result<(), Stri
             .to_string_lossy()
             .to_string();
 
-        if file_name == "notebook.json"
-            || file_name == ".DS_Store"
-            || file_name == ".git"
-            || file_name == "node_modules"
-        {
+        if should_skip_snapshot_entry(&file_name) {
             continue;
         }
 
@@ -78,8 +74,162 @@ fn copy_directory_filtered(source: &Path, destination: &Path) -> Result<(), Stri
     Ok(())
 }
 
+fn should_skip_snapshot_entry(file_name: &str) -> bool {
+    file_name == "notebook.json"
+        || file_name == ".DS_Store"
+        || file_name == ".git"
+        || file_name == "node_modules"
+        || file_name.starts_with('.')
+}
+
+fn resolve_snapshot_root(project_root_path: &Path, snapshot_path: &str) -> Result<PathBuf, String> {
+    ensure_safe_snapshot_path(snapshot_path)?;
+    Ok(project_root_path.join(snapshot_path))
+}
+
+pub fn snapshot_has_restorable_content(
+    project_root_path: &Path,
+    snapshot_path: &str,
+) -> Result<bool, String> {
+    let snapshot_root = resolve_snapshot_root(project_root_path, snapshot_path)?;
+    if !snapshot_root.exists() {
+        return Err(format!(
+            "snapshot directory does not exist: {}",
+            snapshot_root.display()
+        ));
+    }
+
+    for entry in fs::read_dir(&snapshot_root).map_err(|error| {
+        format!(
+            "failed to read directory {}: {}",
+            snapshot_root.display(),
+            error
+        )
+    })? {
+        let path = entry
+            .map_err(|error| format!("failed to inspect directory entry: {}", error))?
+            .path();
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| format!("missing file name for {}", path.display()))?
+            .to_string_lossy()
+            .to_string();
+
+        if should_skip_snapshot_entry(&file_name) || file_name == "README.md" {
+            continue;
+        }
+
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+pub fn collect_snapshot_files(root: &Path) -> Result<Vec<String>, String> {
+    let mut files = Vec::new();
+    collect_snapshot_files_recursive(root, root, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_snapshot_files_recursive(
+    root: &Path,
+    current: &Path,
+    files: &mut Vec<String>,
+) -> Result<(), String> {
+    for entry in fs::read_dir(current)
+        .map_err(|error| format!("failed to read directory {}: {}", current.display(), error))?
+    {
+        let path = entry
+            .map_err(|error| format!("failed to inspect directory entry: {}", error))?
+            .path();
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| format!("missing file name for {}", path.display()))?
+            .to_string_lossy()
+            .to_string();
+
+        if should_skip_snapshot_entry(&file_name) {
+            continue;
+        }
+
+        if path.is_dir() {
+            collect_snapshot_files_recursive(root, &path, files)?;
+            continue;
+        }
+
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|error| format!("failed to compute relative path: {}", error))?
+            .to_string_lossy()
+            .to_string();
+        files.push(relative);
+    }
+
+    Ok(())
+}
+
+pub fn restore_snapshot(
+    project_root_path: &Path,
+    package_root: &Path,
+    snapshot_path: &str,
+) -> Result<(), String> {
+    let snapshot_root = resolve_snapshot_root(project_root_path, snapshot_path)?;
+    if !snapshot_root.exists() {
+        return Err(format!(
+            "snapshot directory does not exist: {}",
+            snapshot_root.display()
+        ));
+    }
+
+    if !snapshot_has_restorable_content(project_root_path, snapshot_path)? {
+        return Err(format!(
+            "snapshot {} does not contain restorable package files",
+            snapshot_path
+        ));
+    }
+
+    clear_package_contents(package_root)?;
+    copy_directory_filtered(&snapshot_root, package_root)?;
+    Ok(())
+}
+
+fn clear_package_contents(package_root: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(package_root).map_err(|error| {
+        format!(
+            "failed to read directory {}: {}",
+            package_root.display(),
+            error
+        )
+    })? {
+        let path = entry
+            .map_err(|error| format!("failed to inspect directory entry: {}", error))?
+            .path();
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| format!("missing file name for {}", path.display()))?
+            .to_string_lossy()
+            .to_string();
+
+        if should_skip_snapshot_entry(&file_name) {
+            continue;
+        }
+
+        if path.is_dir() {
+            fs::remove_dir_all(&path).map_err(|error| {
+                format!("failed to remove directory {}: {}", path.display(), error)
+            })?;
+        } else {
+            fs::remove_file(&path)
+                .map_err(|error| format!("failed to remove file {}: {}", path.display(), error))?;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn snapshot_package(
-    workspace_root: &Path,
+    project_root_path: &Path,
     package_root: &Path,
     package_id: &str,
     version_number: u32,
@@ -87,7 +237,7 @@ pub fn snapshot_package(
     let snapshot_path = format!("{}/{}/v{}", SNAPSHOT_PREFIX, package_id, version_number);
     ensure_safe_snapshot_path(&snapshot_path)?;
 
-    let destination = workspace_root.join(&snapshot_path);
+    let destination = project_root_path.join(&snapshot_path);
     if destination.exists() {
         fs::remove_dir_all(&destination).map_err(|error| {
             format!(
@@ -103,10 +253,10 @@ pub fn snapshot_package(
     Ok(snapshot_path)
 }
 
-pub fn delete_snapshot(workspace_root: &Path, snapshot_path: &str) -> Result<(), String> {
+pub fn delete_snapshot(project_root_path: &Path, snapshot_path: &str) -> Result<(), String> {
     ensure_safe_snapshot_path(snapshot_path)?;
 
-    let absolute = workspace_root.join(snapshot_path);
+    let absolute = project_root_path.join(snapshot_path);
     if !absolute.exists() {
         return Ok(());
     }
@@ -132,6 +282,6 @@ pub fn delete_snapshot(workspace_root: &Path, snapshot_path: &str) -> Result<(),
     Ok(())
 }
 
-pub fn snapshots_root(workspace_root: &Path) -> PathBuf {
-    workspace_root.join(SNAPSHOT_PREFIX)
+pub fn snapshots_root(project_root_path: &Path) -> PathBuf {
+    project_root_path.join(SNAPSHOT_PREFIX)
 }

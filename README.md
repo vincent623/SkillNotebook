@@ -1,6 +1,8 @@
 # Skill Notebook
 
-Skill Notebook is a macOS-first desktop app for managing local skill packages.
+Skill Notebook is a macOS-first skill workbench built around a Rust CLI core plus a thin desktop shell.
+
+The core assumption is simple: every project has one fixed skill root at `.skills/`, and the app or CLI manages that directory rather than chasing scattered folders.
 
 It is designed to feel like a hybrid of:
 
@@ -23,6 +25,13 @@ The product loop is:
 
 `Find -> Create -> Evaluate -> Version`
 
+The product is intentionally organized around four core commands:
+
+- `skill find`
+- `skill create`
+- `skill eval`
+- `skill version`
+
 ## Stack
 
 - `Tauri 2`
@@ -32,15 +41,15 @@ The product loop is:
 - `Vite`
 - `Zustand`
 
-## Current Scaffold
+## Current State
 
 This repository currently includes:
 
 - a runnable Tauri + React desktop shell
-- a three-pane workspace UI
-- typed frontend models and stores
-- Rust domain models and command skeletons
-- `PRD.md` and `TECH_SPEC.md` distilled from the source chat
+- a three-pane project UI with real package file editing
+- a Rust CLI core for `find / create / eval / version`
+- formal version save, diff, and restore flows
+- `.42cog/PRD.md` and `.42cog/TECH_SPEC.md` distilled from the source chat
 
 ## Development
 
@@ -48,6 +57,12 @@ Install dependencies:
 
 ```bash
 npm install
+```
+
+Run the CLI core:
+
+```bash
+cargo run --manifest-path src-tauri/Cargo.toml --bin skill -- --help
 ```
 
 Run the desktop app:
@@ -84,12 +99,13 @@ Configuration via env vars:
 - `src/`: React UI shell
 - `src-tauri/`: Rust core and Tauri commands
 - `chats/`: source product conversations
-- `docs/`: supporting docs
-- `examples/`: sample workspace material
+- `.42cog/`: canonical product, technical, and frontend design specifications
+- `docs/`: supporting docs and runnable design artifacts
+- `examples/`: sample project-root material
 
 ## Near-Term Milestones
 
-1. Workspace bootstrapping and local package discovery
+1. Project-root bootstrapping and local `.skills/` discovery
 2. Package detail loading from filesystem
 3. `skill-create` (or Claude CLI) integration and first eval pass
 4. formal version save / restore flow with snapshot trimming

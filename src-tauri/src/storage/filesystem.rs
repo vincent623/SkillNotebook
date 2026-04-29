@@ -1,20 +1,22 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::eval::EvalReport;
-use crate::domain::package::{PackageNotebookDocument, SkillPackage};
+use crate::domain::package::{
+    PackageFileContent, PackageFileEntry, PackageNotebookDocument, SkillPackage,
+};
 use crate::domain::preview::PreviewModel;
+use crate::domain::project_root::ProjectRoot;
 use crate::domain::version::PackageVersion;
-use crate::domain::workspace::Workspace;
 use crate::utils::ids::slugify;
 
 #[derive(Debug, Clone)]
-pub struct ScannedWorkspace {
-    pub workspace: Workspace,
+pub struct ScannedProjectRoot {
+    pub project_root: ProjectRoot,
     pub packages: Vec<SkillPackage>,
     pub eval_reports: Vec<EvalReport>,
     pub versions: Vec<PackageVersion>,
@@ -23,7 +25,7 @@ pub struct ScannedWorkspace {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
-struct WorkspaceConfigFile {
+struct ProjectRootConfigFile {
     id: Option<String>,
     name: Option<String>,
     created_at: Option<String>,
@@ -31,8 +33,10 @@ struct WorkspaceConfigFile {
     last_opened_at: Option<String>,
 }
 
-pub fn default_workspace_root() -> PathBuf {
-    if let Ok(value) = env::var("SKILL_NOTEBOOK_WORKSPACE") {
+const CANONICAL_SKILLS_DIR: &str = ".skills";
+
+pub fn default_project_root() -> PathBuf {
+    if let Ok(value) = env::var("SKILL_NOTEBOOK_PROJECT_ROOT") {
         return PathBuf::from(value);
     }
 
@@ -40,27 +44,20 @@ pub fn default_workspace_root() -> PathBuf {
         .parent()
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")))
         .join("examples")
-        .join("workspace")
+        .join("project-root")
 }
 
-pub fn scan_workspace(root_path: Option<&str>) -> Result<ScannedWorkspace, String> {
-    let workspace_root = resolve_workspace_root(root_path);
-    let workspace = read_workspace(&workspace_root)?;
-    let packages_root = workspace_root.join("packages");
-
-    if !packages_root.exists() {
-        return Err(format!(
-            "workspace packages directory not found: {}",
-            packages_root.display()
-        ));
-    }
+pub fn scan_project_root(root_path: Option<&str>) -> Result<ScannedProjectRoot, String> {
+    let project_root_path = resolve_project_root(root_path);
+    let project_root = read_project_root(&project_root_path)?;
+    let skills_root = locate_skills_root(&project_root_path)?;
 
     let mut packages = Vec::new();
     let mut eval_reports = Vec::new();
     let mut versions = Vec::new();
     let mut previews = Vec::new();
 
-    for package_dir in list_directories(&packages_root)? {
+    for package_dir in list_directories(&skills_root)? {
         let notebook = load_package_notebook(&package_dir)?;
         let slug = package_dir
             .file_name()
@@ -75,7 +72,7 @@ pub fn scan_workspace(root_path: Option<&str>) -> Result<ScannedWorkspace, Strin
 
         let package = SkillPackage {
             id: package_id.clone(),
-            workspace_id: workspace.id.clone(),
+            project_root_id: project_root.id.clone(),
             slug,
             name: fallback_string(&notebook.name, "Untitled Package"),
             description: fallback_string(&notebook.description, "No description yet."),
@@ -126,8 +123,8 @@ pub fn scan_workspace(root_path: Option<&str>) -> Result<ScannedWorkspace, Strin
 
     eval_reports.sort_by(|left, right| right.created_at.cmp(&left.created_at));
 
-    Ok(ScannedWorkspace {
-        workspace,
+    Ok(ScannedProjectRoot {
+        project_root,
         packages,
         eval_reports,
         versions,
@@ -135,19 +132,36 @@ pub fn scan_workspace(root_path: Option<&str>) -> Result<ScannedWorkspace, Strin
     })
 }
 
-pub fn workspace_root_for_id(
-    workspace_id: &str,
+pub fn project_root_for_id(
+    project_root_id: &str,
     root_path: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let scanned = scan_workspace(root_path)?;
-    if scanned.workspace.id == workspace_id {
-        Ok(PathBuf::from(scanned.workspace.root_path))
+    let scanned = scan_project_root(root_path)?;
+    if scanned.project_root.id == project_root_id {
+        Ok(PathBuf::from(scanned.project_root.root_path))
     } else {
         Err(format!(
-            "workspace id mismatch: expected {}, found {}",
-            workspace_id, scanned.workspace.id
+            "project root id mismatch: expected {}, found {}",
+            project_root_id, scanned.project_root.id
         ))
     }
+}
+
+pub fn canonical_skills_root(project_root_path: &Path) -> PathBuf {
+    project_root_path.join(CANONICAL_SKILLS_DIR)
+}
+
+pub fn locate_skills_root(project_root_path: &Path) -> Result<PathBuf, String> {
+    let canonical = canonical_skills_root(project_root_path);
+    if canonical.exists() {
+        return Ok(canonical);
+    }
+
+    Err(format!(
+        "skill root not found under {}. Expected {}/.",
+        project_root_path.display(),
+        CANONICAL_SKILLS_DIR
+    ))
 }
 
 pub fn load_package_notebook(package_dir: &Path) -> Result<PackageNotebookDocument, String> {
@@ -219,32 +233,207 @@ pub fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(),
     Ok(())
 }
 
-fn resolve_workspace_root(root_path: Option<&str>) -> PathBuf {
+pub fn list_package_file_tree(package_root: &Path) -> Result<Vec<PackageFileEntry>, String> {
+    build_package_file_entries(package_root, package_root)
+}
+
+pub fn read_package_text_file(
+    package_root: &Path,
+    relative_path: &str,
+) -> Result<PackageFileContent, String> {
+    let (normalized_path, absolute_path) = resolve_package_text_path(package_root, relative_path)?;
+    let metadata = fs::symlink_metadata(&absolute_path)
+        .map_err(|error| format!("failed to inspect {}: {}", absolute_path.display(), error))?;
+
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "refusing to read symlinked file inside package: {}",
+            normalized_path
+        ));
+    }
+
+    if !metadata.is_file() {
+        return Err(format!("package path is not a file: {}", normalized_path));
+    }
+
+    let content = fs::read_to_string(&absolute_path)
+        .map_err(|error| format!("failed to read {}: {}", absolute_path.display(), error))?;
+
+    Ok(PackageFileContent {
+        path: normalized_path,
+        content,
+        encoding: "utf-8".to_string(),
+    })
+}
+
+pub fn write_package_text_file(
+    package_root: &Path,
+    relative_path: &str,
+    content: &str,
+) -> Result<PackageFileContent, String> {
+    let (normalized_path, absolute_path) = resolve_package_text_path(package_root, relative_path)?;
+
+    if let Some(parent) = absolute_path.parent() {
+        ensure_directory(parent)?;
+    }
+
+    fs::write(&absolute_path, content)
+        .map_err(|error| format!("failed to write {}: {}", absolute_path.display(), error))?;
+
+    Ok(PackageFileContent {
+        path: normalized_path,
+        content: content.to_string(),
+        encoding: "utf-8".to_string(),
+    })
+}
+
+fn resolve_project_root(root_path: Option<&str>) -> PathBuf {
     let path = root_path
         .map(PathBuf::from)
-        .unwrap_or_else(default_workspace_root);
+        .unwrap_or_else(default_project_root);
 
     fs::canonicalize(&path).unwrap_or(path)
 }
 
-fn read_workspace(root_path: &Path) -> Result<Workspace, String> {
+fn build_package_file_entries(
+    package_root: &Path,
+    current: &Path,
+) -> Result<Vec<PackageFileEntry>, String> {
+    let mut entries = fs::read_dir(current)
+        .map_err(|error| format!("failed to read directory {}: {}", current.display(), error))?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            if should_skip_package_entry(&name) {
+                return None;
+            }
+
+            Some((name, path))
+        })
+        .collect::<Vec<_>>();
+
+    entries.sort_by(|left, right| {
+        let left_is_dir = left.1.is_dir();
+        let right_is_dir = right.1.is_dir();
+
+        right_is_dir
+            .cmp(&left_is_dir)
+            .then_with(|| left.0.to_lowercase().cmp(&right.0.to_lowercase()))
+    });
+
+    let mut tree = Vec::new();
+
+    for (name, path) in entries {
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("failed to inspect {}: {}", path.display(), error))?;
+
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+
+        let relative = path
+            .strip_prefix(package_root)
+            .map_err(|error| format!("failed to compute relative path: {}", error))?
+            .to_string_lossy()
+            .to_string();
+
+        if metadata.is_dir() {
+            let children = build_package_file_entries(package_root, &path)?;
+            tree.push(PackageFileEntry {
+                path: relative,
+                name,
+                is_directory: true,
+                children: Some(children),
+            });
+        } else if metadata.is_file() {
+            tree.push(PackageFileEntry {
+                path: relative,
+                name,
+                is_directory: false,
+                children: None,
+            });
+        }
+    }
+
+    Ok(tree)
+}
+
+fn should_skip_package_entry(name: &str) -> bool {
+    name.starts_with('.') || name == "notebook.json"
+}
+
+fn resolve_package_text_path(
+    package_root: &Path,
+    relative_path: &str,
+) -> Result<(String, PathBuf), String> {
+    let cleaned = sanitize_package_relative_path(relative_path)?;
+    let normalized = cleaned.to_string_lossy().to_string();
+    let absolute = package_root.join(&cleaned);
+
+    Ok((normalized, absolute))
+}
+
+fn sanitize_package_relative_path(relative_path: &str) -> Result<PathBuf, String> {
+    let raw = relative_path.trim();
+    if raw.is_empty() {
+        return Err("package file path cannot be empty".to_string());
+    }
+
+    let candidate = Path::new(raw);
+    if candidate.is_absolute() {
+        return Err(format!("absolute paths are not allowed: {}", raw));
+    }
+
+    let mut cleaned = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            Component::Normal(part) => {
+                let value = part.to_string_lossy().to_string();
+                if should_skip_package_entry(&value) {
+                    return Err(format!("package file is not editable: {}", raw));
+                }
+                cleaned.push(part);
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(format!(
+                    "parent directory traversal is not allowed: {}",
+                    raw
+                ))
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!("absolute paths are not allowed: {}", raw))
+            }
+        }
+    }
+
+    if cleaned.as_os_str().is_empty() {
+        return Err(format!("invalid package file path: {}", raw));
+    }
+
+    Ok(cleaned)
+}
+
+fn read_project_root(root_path: &Path) -> Result<ProjectRoot, String> {
     let config_path = root_path.join(".skill-notebook").join("config.json");
-    let config: WorkspaceConfigFile = if config_path.exists() {
+    let config: ProjectRootConfigFile = if config_path.exists() {
         read_json_file(&config_path)?
     } else {
-        WorkspaceConfigFile::default()
+        ProjectRootConfigFile::default()
     };
 
     let inferred_name = root_path
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_else(|| "Skill Notebook Workspace".to_string());
+        .unwrap_or_else(|| "Skill Notebook Project Root".to_string());
     let name = config.name.unwrap_or_else(|| inferred_name.clone());
 
-    Ok(Workspace {
+    Ok(ProjectRoot {
         id: config
             .id
-            .unwrap_or_else(|| format!("workspace-{}", slugify(&name))),
+            .unwrap_or_else(|| format!("project-root-{}", slugify(&name))),
         name,
         root_path: root_path.to_string_lossy().to_string(),
         created_at: config
@@ -403,13 +592,41 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::scan_workspace;
+    use super::{
+        list_package_file_tree, read_package_text_file, scan_project_root, write_package_text_file,
+    };
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::storage::filesystem;
+
+    fn tmp_project_root_path() -> PathBuf {
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "skill-notebook-filesystem-test-{}-{}",
+            std::process::id(),
+            seed
+        ))
+    }
+
+    fn copy_example_project_root(destination: &PathBuf) -> PathBuf {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("examples")
+            .join("project-root");
+        filesystem::copy_directory_recursive(&root, destination).expect("copy project_root");
+        destination.clone()
+    }
 
     #[test]
     fn scans_the_default_example_workspace() {
-        let scanned = scan_workspace(None).expect("default workspace should scan");
+        let scanned = scan_project_root(None).expect("default project_root should scan");
 
-        assert_eq!(scanned.workspace.id, "workspace-main");
+        assert_eq!(scanned.project_root.id, "project-root-main");
         assert_eq!(scanned.packages.len(), 3);
         assert!(scanned
             .previews
@@ -419,11 +636,73 @@ mod tests {
 
     #[test]
     fn reads_versions_from_package_notebook_files() {
-        let scanned = scan_workspace(None).expect("default workspace should scan");
+        let scanned = scan_project_root(None).expect("default project_root should scan");
 
         assert!(scanned
             .versions
             .iter()
             .any(|version| version.package_id == "pkg-pdf" && version.version_number == 1));
+    }
+
+    #[test]
+    fn lists_visible_package_files_as_a_tree() {
+        let scanned = scan_project_root(None).expect("default project_root should scan");
+        let package_root = scanned
+            .packages
+            .iter()
+            .find(|item| item.id == "pkg-interview")
+            .map(|item| PathBuf::from(&item.root_path))
+            .expect("pkg-interview should exist");
+
+        let tree = list_package_file_tree(&package_root).expect("tree should build");
+
+        assert!(tree.iter().any(|entry| entry.path == "SKILL.md"));
+        assert!(tree
+            .iter()
+            .any(|entry| entry.path == "prompts" && entry.is_directory));
+        assert!(!tree.iter().any(|entry| entry.path == "notebook.json"));
+    }
+
+    #[test]
+    fn reads_and_writes_package_text_files() {
+        let project_root_path = tmp_project_root_path();
+        let root = copy_example_project_root(&project_root_path);
+        let package_root =
+            filesystem::canonical_skills_root(&root).join("interview-insight-extractor");
+
+        let original = read_package_text_file(&package_root, "prompts/task.md")
+            .expect("should read package file");
+        assert!(original.content.contains("Extract user pain points"));
+
+        let updated = write_package_text_file(
+            &package_root,
+            "prompts/task.md",
+            "# updated\n\ncontent from test\n",
+        )
+        .expect("should write package file");
+        assert_eq!(updated.path, "prompts/task.md");
+
+        let reread = read_package_text_file(&package_root, "prompts/task.md")
+            .expect("should re-read updated file");
+        assert_eq!(reread.content, "# updated\n\ncontent from test\n");
+    }
+
+    #[test]
+    fn rejects_hidden_or_traversal_package_paths() {
+        let scanned = scan_project_root(None).expect("default project_root should scan");
+        let package_root = scanned
+            .packages
+            .iter()
+            .find(|item| item.id == "pkg-interview")
+            .map(|item| PathBuf::from(&item.root_path))
+            .expect("pkg-interview should exist");
+
+        let traversal = read_package_text_file(&package_root, "../outside.txt")
+            .expect_err("traversal path should fail");
+        assert!(traversal.contains("traversal"));
+
+        let hidden = read_package_text_file(&package_root, "notebook.json")
+            .expect_err("metadata file should be blocked");
+        assert!(hidden.contains("not editable"));
     }
 }

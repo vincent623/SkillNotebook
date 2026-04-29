@@ -54,7 +54,7 @@ pub fn latest_report(
     package_id: &str,
     root_path: Option<&str>,
 ) -> Result<Option<EvalReport>, String> {
-    let report = filesystem::scan_workspace(root_path)?
+    let report = filesystem::scan_project_root(root_path)?
         .eval_reports
         .into_iter()
         .find(|item| item.package_id == package_id);
@@ -63,7 +63,7 @@ pub fn latest_report(
 }
 
 pub fn run_eval(package_id: &str, root_path: Option<&str>) -> Result<EvalReport, String> {
-    let scanned = filesystem::scan_workspace(root_path)?;
+    let scanned = filesystem::scan_project_root(root_path)?;
     let package = scanned
         .packages
         .iter()
@@ -71,13 +71,13 @@ pub fn run_eval(package_id: &str, root_path: Option<&str>) -> Result<EvalReport,
         .cloned()
         .ok_or_else(|| format!("package not found: {}", package_id))?;
 
-    let workspace_root = PathBuf::from(&scanned.workspace.root_path);
+    let project_root_path = PathBuf::from(&scanned.project_root.root_path);
     let package_root = PathBuf::from(&package.root_path);
     let mut notebook = filesystem::load_package_notebook(&package_root)?;
     let iteration = notebook.eval_reports.len() as u32 + 1;
 
     let evaluation = evaluate_package(
-        &workspace_root,
+        &project_root_path,
         &package_root,
         &package.id,
         &package.slug,
@@ -101,7 +101,7 @@ pub fn run_eval(package_id: &str, root_path: Option<&str>) -> Result<EvalReport,
 }
 
 pub fn evaluate_package(
-    workspace_root: &Path,
+    project_root_path: &Path,
     package_root: &Path,
     package_id: &str,
     slug: &str,
@@ -309,7 +309,7 @@ pub fn evaluate_package(
     );
 
     sync_eval_workspace(
-        workspace_root,
+        project_root_path,
         package_root,
         package_id,
         slug,
@@ -331,7 +331,7 @@ pub fn evaluate_package(
 }
 
 fn sync_eval_workspace(
-    workspace_root: &Path,
+    project_root_path: &Path,
     package_root: &Path,
     package_id: &str,
     slug: &str,
@@ -344,7 +344,7 @@ fn sync_eval_workspace(
     validation: &ValidationOutcome,
     duration_ms: u64,
 ) -> Result<(), String> {
-    let eval_root = workspace_root.join(".42eval").join(slug);
+    let eval_root = project_root_path.join(".42eval").join(slug);
     let cases_root = eval_root.join("cases");
     let iteration_root = eval_root.join("iterations").join(format!("v{}", iteration));
     let snapshot_root = eval_root.join("skill-snapshot");
@@ -913,29 +913,30 @@ mod tests {
 
     use super::{evaluate_package, PackageStatus, SkillEvalFile};
 
-    fn make_temp_workspace(name: &str) -> PathBuf {
+    fn make_temp_project_root(name: &str) -> PathBuf {
         let root = env::temp_dir().join(format!("skill-notebook-{}-{}", name, std::process::id()));
         if root.exists() {
             fs::remove_dir_all(&root).ok();
         }
-        fs::create_dir_all(root.join(".skill-notebook")).expect("workspace config dir");
-        fs::create_dir_all(root.join("packages")).expect("packages dir");
+        fs::create_dir_all(root.join(".skill-notebook")).expect("project_root config dir");
+        fs::create_dir_all(filesystem::canonical_skills_root(&root)).expect("skills dir");
         filesystem::write_text_file(
             &root.join(".skill-notebook").join("config.json"),
             &format!(
-                "{{\"id\":\"workspace-test\",\"name\":\"Test Workspace\",\"createdAt\":\"{}\",\"updatedAt\":\"{}\"}}",
+                "{{\"id\":\"project_root-test\",\"name\":\"Test ProjectRoot\",\"createdAt\":\"{}\",\"updatedAt\":\"{}\"}}",
                 now_iso(),
                 now_iso()
             ),
         )
-        .expect("workspace config");
+        .expect("project_root config");
         root
     }
 
     #[test]
     fn evaluates_a_valid_package_as_usable() {
-        let workspace_root = make_temp_workspace("eval-usable");
-        let package_root = workspace_root.join("packages").join("draft-skill");
+        let project_root_path = make_temp_project_root("eval-usable");
+        let package_root =
+            filesystem::canonical_skills_root(&project_root_path).join("draft-skill");
         fs::create_dir_all(package_root.join("prompts")).expect("prompts");
         fs::create_dir_all(package_root.join("examples")).expect("examples");
         fs::create_dir_all(package_root.join("evals")).expect("evals");
@@ -994,7 +995,7 @@ mod tests {
         filesystem::save_package_notebook(&package_root, &notebook).expect("notebook");
 
         let evaluation = evaluate_package(
-            &workspace_root,
+            &project_root_path,
             &package_root,
             "pkg-draft-skill",
             "draft-skill",
@@ -1013,6 +1014,6 @@ mod tests {
             PackageStatus::Validated
         ));
 
-        fs::remove_dir_all(workspace_root).ok();
+        fs::remove_dir_all(project_root_path).ok();
     }
 }

@@ -24,7 +24,7 @@ impl Default for PackageStatus {
 #[serde(rename_all = "camelCase")]
 pub struct SkillPackage {
     pub id: String,
-    pub workspace_id: String,
+    pub project_root_id: String,
     pub slug: String,
     pub name: String,
     pub description: String,
@@ -71,9 +71,43 @@ pub struct SearchResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreatePackageFromNlRequest {
-    pub workspace_id: String,
+    pub project_root_id: String,
     pub prompt: String,
     pub context: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePackageFromSourcesRequest {
+    pub project_root_id: String,
+    pub source_paths: Vec<String>,
+    pub prompt: Option<String>,
+    pub context: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageUpdateRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub status: Option<PackageStatus>,
+    pub related_skills: Option<Vec<String>>,
+    pub bundle_candidates: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitPackagePreviewRequest {
+    pub project_root_id: String,
+    pub preview_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscardPackagePreviewRequest {
+    pub project_root_id: String,
+    pub preview_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,4 +123,46 @@ pub struct CreatePackageFromNlResponse {
     pub validation_summary: String,
     pub generator_used: String,
     pub generation_summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackagePreviewFile {
+    pub path: String,
+    pub content: String,
+    pub encoding: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePackagePreviewResponse {
+    pub preview_id: String,
+    pub project_root_id: String,
+    pub name: String,
+    pub slug: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub files: Vec<PackagePreviewFile>,
+    pub file_tree: Vec<PackageFileEntry>,
+    pub generator_used: String,
+    pub generation_summary: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageFileEntry {
+    pub path: String,
+    pub name: String,
+    pub is_directory: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<PackageFileEntry>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageFileContent {
+    pub path: String,
+    pub content: String,
+    pub encoding: String,
 }

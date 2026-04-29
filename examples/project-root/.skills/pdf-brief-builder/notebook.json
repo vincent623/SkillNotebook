@@ -1,0 +1,153 @@
+{
+  "id": "pkg-pdf",
+  "name": "PDF Brief Builder",
+  "description": "Clean a pile of PDFs and turn them into a concise brief with source anchors.",
+  "tags": [
+    "pdf",
+    "cleanup",
+    "summary"
+  ],
+  "status": "needs_eval",
+  "currentVersion": 2,
+  "lastEvalStatus": "needs_improvement",
+  "relatedSkills": [
+    "report-refiner"
+  ],
+  "bundleCandidates": [],
+  "createdAt": "2026-04-11T10:20:00Z",
+  "updatedAt": "2026-04-17T09:41:46.95269Z",
+  "versions": [
+    {
+      "id": "version-pkg-pdf-v2",
+      "packageId": "pkg-pdf",
+      "versionNumber": 2,
+      "note": "V1-1",
+      "snapshotPath": ".skill-notebook/snapshots/pkg-pdf/v2",
+      "evalReportId": "eval-pdf-brief-builder-v3",
+      "isPinned": false,
+      "createdAt": "2026-04-17T09:41:20.786966Z"
+    },
+    {
+      "id": "version-pdf-v1",
+      "packageId": "pkg-pdf",
+      "versionNumber": 1,
+      "note": "Initial formal version after first eval pass.",
+      "snapshotPath": ".skill-notebook/snapshots/pkg-pdf/v1",
+      "evalReportId": "eval-pdf-v1",
+      "isPinned": false,
+      "createdAt": "2026-04-13T17:52:00Z"
+    }
+  ],
+  "evalReports": [
+    {
+      "id": "eval-pdf-brief-builder-v4",
+      "packageId": "pkg-pdf",
+      "completenessScore": 0.92,
+      "clarityScore": 0.46,
+      "executabilityScore": 0.65,
+      "overallStatus": "needs_improvement",
+      "suggestions": [
+        "No YAML frontmatter found",
+        "Add a frontmatter description that clearly says what the skill does and when to use it.",
+        "Add a short 'When not to use' or boundary section so the skill does not over-trigger."
+      ],
+      "details": {
+        "hasSkillMd": true,
+        "hasExamples": true,
+        "hasPrompts": true,
+        "hasScripts": true,
+        "inputDefined": true,
+        "outputDefined": true,
+        "boundariesClear": false,
+        "notes": [
+          "No YAML frontmatter found",
+          "1 reference file(s) are bundled for progressive disclosure.",
+          "1 script file(s) are available for deterministic execution steps."
+        ]
+      },
+      "createdAt": "2026-04-17T09:41:46.899487Z"
+    },
+    {
+      "id": "eval-pdf-brief-builder-v3",
+      "packageId": "pkg-pdf",
+      "completenessScore": 0.92,
+      "clarityScore": 0.46,
+      "executabilityScore": 0.65,
+      "overallStatus": "needs_improvement",
+      "suggestions": [
+        "No YAML frontmatter found",
+        "Add a frontmatter description that clearly says what the skill does and when to use it.",
+        "Add a short 'When not to use' or boundary section so the skill does not over-trigger."
+      ],
+      "details": {
+        "hasSkillMd": true,
+        "hasExamples": true,
+        "hasPrompts": true,
+        "hasScripts": true,
+        "inputDefined": true,
+        "outputDefined": true,
+        "boundariesClear": false,
+        "notes": [
+          "No YAML frontmatter found",
+          "1 reference file(s) are bundled for progressive disclosure.",
+          "1 script file(s) are available for deterministic execution steps."
+        ]
+      },
+      "createdAt": "2026-04-17T09:41:06.337021Z"
+    },
+    {
+      "id": "eval-pdf-brief-builder-v2",
+      "packageId": "pkg-pdf",
+      "completenessScore": 0.92,
+      "clarityScore": 0.46,
+      "executabilityScore": 0.65,
+      "overallStatus": "needs_improvement",
+      "suggestions": [
+        "No YAML frontmatter found",
+        "Add a frontmatter description that clearly says what the skill does and when to use it.",
+        "Add a short 'When not to use' or boundary section so the skill does not over-trigger."
+      ],
+      "details": {
+        "hasSkillMd": true,
+        "hasExamples": true,
+        "hasPrompts": true,
+        "hasScripts": true,
+        "inputDefined": true,
+        "outputDefined": true,
+        "boundariesClear": false,
+        "notes": [
+          "No YAML frontmatter found",
+          "1 reference file(s) are bundled for progressive disclosure.",
+          "1 script file(s) are available for deterministic execution steps."
+        ]
+      },
+      "createdAt": "2026-04-17T09:41:02.149945Z"
+    },
+    {
+      "id": "eval-pdf-v1",
+      "packageId": "pkg-pdf",
+      "completenessScore": 0.76,
+      "clarityScore": 0.69,
+      "executabilityScore": 0.71,
+      "overallStatus": "needs_improvement",
+      "suggestions": [
+        "Clarify the output contract for citation formatting.",
+        "Add a stronger example for multi-document merge behavior."
+      ],
+      "details": {
+        "hasSkillMd": true,
+        "hasExamples": true,
+        "hasPrompts": true,
+        "hasScripts": true,
+        "inputDefined": true,
+        "outputDefined": false,
+        "boundariesClear": false,
+        "notes": [
+          "The package is structurally complete.",
+          "The final brief schema is still underspecified."
+        ]
+      },
+      "createdAt": "2026-04-13T17:51:00Z"
+    }
+  ]
+}

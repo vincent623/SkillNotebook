@@ -1,0 +1,8 @@
+{
+  "completedAt": "2026-04-17T09:36:55.035583Z",
+  "durationMs": 48,
+  "model": "local-structural-review",
+  "startedAt": "2026-04-17T09:36:55.035583Z",
+  "toolCalls": 1,
+  "totalTokens": 0
+}

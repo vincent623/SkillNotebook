@@ -6,7 +6,7 @@ use crate::state::app_state::AppState;
 pub async fn app_bootstrap(
     state: tauri::State<'_, AppState>,
 ) -> Result<AppResponse<AppBootstrap>, String> {
-    let root_path = state.current_workspace_root()?;
+    let root_path = state.current_project_root()?;
 
     match bootstrap_service::build_bootstrap(Some(root_path.as_str())) {
         Ok(data) => Ok(AppResponse::success(data)),

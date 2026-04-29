@@ -1,4 +1,4 @@
-export type AppScreen = "home" | "workspace" | "settings";
+export type AppScreen = "explorer" | "notebook" | "create" | "settings";
 
 export type PackageStatus =
   | "draft"
@@ -9,9 +9,7 @@ export type PackageStatus =
 
 export type EvalOverallStatus = "usable" | "needs_improvement" | "problematic";
 
-export type WorkspaceTab = "overview" | "files" | "preview" | "test";
-
-export interface Workspace {
+export interface ProjectRoot {
   id: string;
   name: string;
   rootPath: string;
@@ -22,7 +20,7 @@ export interface Workspace {
 
 export interface SkillPackage {
   id: string;
-  workspaceId: string;
+  projectRootId: string;
   slug: string;
   name: string;
   description: string;
@@ -48,6 +46,22 @@ export interface PackageVersion {
   createdAt: string;
 }
 
+export type VersionDiffChangeType = "added" | "removed" | "modified";
+
+export interface VersionDiffEntry {
+  path: string;
+  changeType: VersionDiffChangeType;
+  diffText: string;
+}
+
+export interface PackageVersionDiff {
+  versionId: string;
+  packageId: string;
+  versionNumber: number;
+  snapshotPath: string;
+  entries: VersionDiffEntry[];
+}
+
 export interface EvalDetails {
   hasSkillMd: boolean;
   hasExamples: boolean;
@@ -71,6 +85,33 @@ export interface EvalReport {
   createdAt: string;
 }
 
+export type PackageTestStatus = "passed" | "failed" | "missing";
+
+export interface PackageTestCheckResult {
+  description: string;
+  passed: boolean;
+  evidence: string;
+}
+
+export interface PackageTestFileResult {
+  path: string;
+  name: string;
+  passed: boolean;
+  checks: PackageTestCheckResult[];
+}
+
+export interface PackageTestReport {
+  id: string;
+  packageId: string;
+  status: PackageTestStatus;
+  totalTests: number;
+  passedTests: number;
+  failedTests: number;
+  files: PackageTestFileResult[];
+  summary: string;
+  createdAt: string;
+}
+
 export interface PreviewModel {
   packageId: string;
   name: string;
@@ -85,8 +126,21 @@ export interface PreviewModel {
   finalPreview: string;
 }
 
+export interface FileEntry {
+  path: string;
+  name: string;
+  isDirectory: boolean;
+  children?: FileEntry[];
+}
+
+export interface FileContent {
+  path: string;
+  content: string;
+  encoding: "utf-8";
+}
+
 export interface AppBootstrap {
-  workspace: Workspace;
+  projectRoot: ProjectRoot;
   packages: SkillPackage[];
   evalReports: EvalReport[];
   versions: PackageVersion[];
@@ -121,17 +175,44 @@ export interface AppSettings {
   platform: string;
   shell: string[];
   formalVersionCap: number;
-  workspaceModel: string;
-  defaultWorkspaceRoot: string;
-  currentWorkspaceRoot: string;
-  recentWorkspaces: Workspace[];
+  projectRootModel: string;
+  skillRootName?: string;
+  defaultProjectRoot: string;
+  currentProjectRoot: string;
+  recentProjectRoots: ProjectRoot[];
   creationBridge: CreationBridgeStatus;
 }
 
 export interface CreatePackageFromNlRequest {
-  workspaceId: string;
+  projectRootId: string;
   prompt: string;
   context?: string | null;
+}
+
+export interface CreatePackageFromSourcesRequest {
+  projectRootId: string;
+  sourcePaths: string[];
+  prompt?: string | null;
+  context?: string | null;
+}
+
+export interface PackageUpdateRequest {
+  name?: string | null;
+  description?: string | null;
+  tags?: string[] | null;
+  status?: PackageStatus | null;
+  relatedSkills?: string[] | null;
+  bundleCandidates?: string[] | null;
+}
+
+export interface CommitPackagePreviewRequest {
+  projectRootId: string;
+  previewId: string;
+}
+
+export interface DiscardPackagePreviewRequest {
+  projectRootId: string;
+  previewId: string;
 }
 
 export interface CreatePackageFromNlResponse {
@@ -145,4 +226,24 @@ export interface CreatePackageFromNlResponse {
   validationSummary: string;
   generatorUsed: string;
   generationSummary: string;
+}
+
+export interface PackagePreviewFile {
+  path: string;
+  content: string;
+  encoding: "utf-8";
+}
+
+export interface CreatePackagePreviewResponse {
+  previewId: string;
+  projectRootId: string;
+  name: string;
+  slug: string;
+  description: string;
+  tags: string[];
+  files: PackagePreviewFile[];
+  fileTree: FileEntry[];
+  generatorUsed: string;
+  generationSummary: string;
+  createdAt: string;
 }

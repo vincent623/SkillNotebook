@@ -1,0 +1,25 @@
+{
+  "classification": {
+    "confidence": 0.6499999761581421,
+    "humanPractice": "emerging",
+    "modelCapability": "strong",
+    "modelScore": 46,
+    "practiceScore": 92,
+    "quadrant": "leverage",
+    "signals": [
+      {
+        "dimension": "model",
+        "direction": "strong",
+        "keyword": "pdf-brief-builder",
+        "weight": 6
+      }
+    ],
+    "strategy": "structural-review"
+  },
+  "createdAt": "2026-04-17T09:41:46.899487Z",
+  "currentIteration": 4,
+  "skillName": "pdf-brief-builder",
+  "skillPath": "/Volumes/My_data/1-ZBKG-dev/SkillNotebook/examples/project-root/packages/pdf-brief-builder",
+  "updatedAt": "2026-04-17T09:41:46.899487Z",
+  "version": "2.0"
+}

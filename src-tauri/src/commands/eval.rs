@@ -8,7 +8,7 @@ pub async fn package_run_eval(
     package_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<AppResponse<EvalReport>, String> {
-    let root_path = state.current_workspace_root()?;
+    let root_path = state.current_project_root()?;
 
     match eval_service::run_eval(&package_id, Some(root_path.as_str())) {
         Ok(item) => Ok(AppResponse::success(item)),

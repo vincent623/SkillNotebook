@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use super::eval::EvalReport;
 use super::package::SkillPackage;
 use super::preview::PreviewModel;
+use super::project_root::ProjectRoot;
 use super::version::PackageVersion;
-use super::workspace::Workspace;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,7 +45,7 @@ impl<T> AppResponse<T> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppBootstrap {
-    pub workspace: Workspace,
+    pub project_root: ProjectRoot,
     pub packages: Vec<SkillPackage>,
     pub eval_reports: Vec<EvalReport>,
     pub versions: Vec<PackageVersion>,

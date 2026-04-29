@@ -1,168 +1,103 @@
 import { useEffect, useState } from "react";
-import { getSettings, openWorkspace } from "../../services/tauri-api";
-import { useWorkspaceStore } from "../../stores/workspace-store";
+import { getSettings, openProjectRoot } from "../../services/tauri-api";
+import { BackButton } from "../../components/common/BackButton";
+import { useProjectStore } from "../../stores/project-store";
 import type { AppSettings } from "../../types/models";
 
-const stack = [
-  "Tauri 2",
-  "Rust core",
-  "React + TypeScript shell",
-  "SQLite for metadata",
-  "Filesystem package source",
-  "skill-create draft bridge with Claude CLI + template fallback",
-  "macOS local shell assumptions",
-];
-
-const commands = [
-  "app_bootstrap",
-  "workspace_open",
-  "package_create_from_nl",
-  "package_run_eval",
-  "package_save_version",
-  "package_run_test",
-];
-
 export function SettingsPage() {
-  const bootstrap = useWorkspaceStore((state) => state.bootstrap);
-  const loadBootstrap = useWorkspaceStore((state) => state.loadBootstrap);
+  const bootstrap = useProjectStore((state) => state.bootstrap);
+  const loadBootstrap = useProjectStore((state) => state.loadBootstrap);
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [workspacePath, setWorkspacePath] = useState("");
-  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
-  const [workspaceSuccess, setWorkspaceSuccess] = useState<string | null>(null);
-  const [isSwitchingWorkspace, setIsSwitchingWorkspace] = useState(false);
+  const [projectRootPath, setWorkspacePath] = useState("");
+  const [projectRootError, setWorkspaceError] = useState<string | null>(null);
+  const [projectRootSuccess, setWorkspaceSuccess] = useState<string | null>(null);
+  const [isSwitching, setIsSwitching] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-
-    async function loadSettings() {
+    async function load() {
       try {
         const next = await getSettings();
-        if (cancelled) {
-          return;
-        }
-
+        if (cancelled) return;
         setSettings(next);
-        setWorkspacePath(next.currentWorkspaceRoot || (bootstrap?.workspace.rootPath ?? ""));
+        setWorkspacePath(next.currentProjectRoot || (bootstrap?.projectRoot.rootPath ?? ""));
       } catch (error) {
-        if (cancelled) {
-          return;
-        }
-
-        setWorkspaceError(error instanceof Error ? error.message : "Failed to load settings.");
+        if (!cancelled) setWorkspaceError(error instanceof Error ? error.message : "加载设置失败");
       }
     }
-
-    void loadSettings();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [bootstrap?.workspace.rootPath]);
+    void load();
+    return () => { cancelled = true; };
+  }, [bootstrap?.projectRoot.rootPath]);
 
   return (
-    <section className="settings-page">
-      <div className="settings-grid">
-        <article className="content-card">
-          <div className="section-head">
-            <h3>Workspace control</h3>
-            <span className="section-meta">Runtime context</span>
-          </div>
-          <label className="field-stack">
-            <span className="search-label">Current workspace root</span>
+    <section className="settings-view">
+      <BackButton />
+      <div className="settings-scroll">
+        <div className="content-card">
+          <h3>项目根目录</h3>
+          <label className="field-stack" style={{ marginTop: 12 }}>
+            <span className="field-label">仓库路径</span>
             <input
-              className="search-input"
-              onChange={(event) => {
-                setWorkspacePath(event.target.value);
-              }}
-              placeholder="/absolute/path/to/workspace"
-              value={workspacePath}
+              className="detail-save-input"
+              onChange={(e) => setWorkspacePath(e.target.value)}
+              placeholder="/absolute/path/to/project-root"
+              value={projectRootPath}
             />
           </label>
-          <div className="button-row">
+          <p className="muted" style={{ marginTop: 8 }}>
+            Skill Notebook 会固定从这个根目录下的 <span className="mono-text">.skills/</span> 读取和创建所有 skill。
+          </p>
+          <div style={{ marginTop: 8 }}>
             <button
               className="button-primary"
-              disabled={isSwitchingWorkspace || !workspacePath.trim()}
+              disabled={isSwitching || !projectRootPath.trim()}
               onClick={async () => {
-                setIsSwitchingWorkspace(true);
+                setIsSwitching(true);
                 setWorkspaceError(null);
                 setWorkspaceSuccess(null);
-
                 try {
-                  const workspace = await openWorkspace(workspacePath.trim());
+                  const projectRoot = await openProjectRoot(projectRootPath.trim());
                   await loadBootstrap();
-                  const nextSettings = await getSettings();
-                  setSettings(nextSettings);
-                  setWorkspacePath(workspace.rootPath);
-                  setWorkspaceSuccess(`Workspace switched to ${workspace.name}.`);
+                  const next = await getSettings();
+                  setSettings(next);
+                  setWorkspacePath(projectRoot.rootPath);
+                  setWorkspaceSuccess(`已切换到 ${projectRoot.rootPath}`);
                 } catch (error) {
-                  setWorkspaceError(
-                    error instanceof Error ? error.message : "Workspace switching failed.",
-                  );
+                  setWorkspaceError(error instanceof Error ? error.message : "切换失败");
                 } finally {
-                  setIsSwitchingWorkspace(false);
+                  setIsSwitching(false);
                 }
               }}
               type="button"
             >
-              {isSwitchingWorkspace ? "Opening..." : "Open Workspace Path"}
+              {isSwitching ? "切换中..." : "打开项目"}
             </button>
           </div>
-          {workspaceSuccess ? (
-            <div className="inline-banner inline-banner-success">{workspaceSuccess}</div>
+          {projectRootSuccess ? <div className="inline-banner inline-banner-success">{projectRootSuccess}</div> : null}
+          {projectRootError ? <div className="inline-banner inline-banner-error">{projectRootError}</div> : null}
+          {settings?.recentProjectRoots?.length ? (
+            <div style={{ marginTop: 12 }}>
+              <span className="field-label">最近使用</span>
+              <ul className="detail-suggestions" style={{ marginTop: 4 }}>
+                {settings.recentProjectRoots.map((item) => (
+                  <li key={item.rootPath}>
+                    <strong>{item.name}</strong> <span className="mono-text">{item.rootPath}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
-          {workspaceError ? (
-            <div className="inline-banner inline-banner-error">{workspaceError}</div>
-          ) : null}
-          {settings?.recentWorkspaces?.length ? (
-            <ul className="detail-list compact-list">
-              {settings.recentWorkspaces.map((item) => (
-                <li key={item.rootPath}>
-                  <strong>{item.name}</strong>: <span className="mono-text">{item.rootPath}</span>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </article>
+        </div>
 
-        <article className="content-card">
-          <div className="section-head">
-            <h3>Workspace target</h3>
-            <span className="section-meta">Local first</span>
-          </div>
-          <p className="mono-text">{bootstrap?.workspace.rootPath ?? "No workspace path yet"}</p>
-          <p className="muted">
-            V1 assumes macOS, Apple Silicon first, and a local `zsh` or `bash` environment with
-            optional `skill-create` (preferred) or Claude CLI draft bridges for richer first drafts.
+        <div className="content-card">
+          <h3>关于</h3>
+          <p className="body-copy" style={{ marginTop: 8 }}>
+            Skill Notebook v0.1.0 — macOS 本地优先的 skill 仓库与版本管理工具。
           </p>
-          <p className="muted">
-            The active workspace is now a runtime context instead of a hardcoded default sample
-            path, so bootstrap, create, and eval flows follow the last opened workspace.
+          <p className="muted" style={{ marginTop: 4 }}>
+            Tauri 2 + Rust + React + TypeScript · Apple Silicon 适配
           </p>
-        </article>
-
-        <article className="content-card">
-          <div className="section-head">
-            <h3>Stack</h3>
-            <span className="section-meta">Confirmed direction</span>
-          </div>
-          <ul className="detail-list compact-list">
-            {stack.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </article>
-
-        <article className="content-card">
-          <div className="section-head">
-            <h3>Command surface</h3>
-            <span className="section-meta">Rust surface</span>
-          </div>
-          <ul className="mono-list">
-            {commands.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </article>
+        </div>
       </div>
     </section>
   );

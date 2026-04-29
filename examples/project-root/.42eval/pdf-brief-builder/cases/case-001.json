@@ -1,0 +1,26 @@
+{
+  "caseId": "case-001",
+  "caseName": "PDF Brief Builder case 1",
+  "expectations": [
+    {
+      "category": "quality",
+      "critical": true,
+      "description": "SKILL.md frontmatter validates successfully.",
+      "id": "exp-1"
+    },
+    {
+      "category": "structure",
+      "critical": true,
+      "description": "The package describes when to use the skill and what it outputs.",
+      "id": "exp-2"
+    },
+    {
+      "category": "content",
+      "critical": false,
+      "description": "Prompt, example, and eval files are present.",
+      "id": "exp-3"
+    }
+  ],
+  "files": [],
+  "prompt": "Run the package structural review."
+}

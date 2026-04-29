@@ -17,10 +17,10 @@
 - If multiple generators exist (`skill-create`, Claude CLI, template), make the selection order explicit in code and surface it in Settings + docs.
 - Add a small auto-mode test matrix so future refactors do not reintroduce drift.
 
-### Workspace Must Become A First-Class Runtime Context Early
+### Project Root Must Become A First-Class Runtime Context Early
 
-- If workspace is a core product object, bootstrap, create, eval, search, and recent/open flows must all share the same current-workspace source of truth.
-- A default-workspace-only architecture can look complete in a single demo environment while silently blocking multi-workspace behavior later.
+- If project root is a core product object, bootstrap, create, eval, search, and recent/open flows must all share the same current-project root source of truth.
+- A default-project root-only architecture can look complete in a single demo environment while silently blocking multi-project root behavior later.
 
 ### External CLI Bridges Need Operational Guardrails Immediately
 
@@ -45,3 +45,133 @@
 
 - If we want a watchdog or recurring automation to keep shipping work, give it a single prioritized queue file instead of forcing it to infer next steps from prose metrics alone.
 - Metrics explain the state of the project; the queue should answer "what do we do next?" with checkable items.
+
+## 2026-04-27
+
+### Spec Directories Should Separate Rules From Artifacts
+
+- Keep canonical PRD, technical spec, and frontend design rules in one predictable spec home such as `.42cog/`.
+- Keep runnable prototypes and bulky design artifacts in `docs/` unless they are pure specifications; link them from the spec home instead of mixing them into it.
+
+### Design Baselines Need A Translation Layer
+
+- A runnable UI prototype should be treated as a behavioral and visual baseline, not as production code to copy wholesale.
+- Add or maintain a normative frontend design spec that maps prototype concepts onto real domain models, backend APIs, and implementation constraints.
+
+### Alignment Reviews Must Compare Three Models
+
+- Compare the product model, interaction model, and engineering model separately before planning implementation work.
+- In Skill Notebook, the Rust project-root model is ahead of the UI, while the `docs/skillnotebook` prototype is ahead of the production frontend experience; both facts matter.
+
+### Path And Naming Migrations Need Test Sweeps
+
+- When a concept is renamed, such as workspace to project root or `examples/project_root` to `examples/project-root`, sweep tests, docs, fixtures, and README references in the same pass.
+- Otherwise the app can run while the test suite quietly records the old architecture.
+
+### Frontend Alignment Should Start With The Daily Surface
+
+- When a prototype is ahead of the production shell, begin by improving the highest-frequency workflow before replacing the whole layout.
+- For Skill Notebook, the editor surface is the right first cut: Markdown preview, frontmatter summary, copy affordance, word count, and save state make the product feel notebook-native while preserving the existing architecture.
+
+### Markdown Preview Should Be Semantic Before It Is Exhaustive
+
+- A small safe renderer can cover frontmatter, headings, lists, code, blockquotes, and paragraphs without introducing a dependency or unsafe HTML rendering.
+- Treat full CommonMark parity as a later requirement; early alignment is about making skill documents readable and structured in the app.
+
+### Component Files Should Only Export Components
+
+- React Fast Refresh lint rules catch mixed component and utility exports.
+- Keep reusable parsers and helpers in utility files, then import them into component files so local UI iteration stays reliable.
+
+### Workbench Migration Should Preserve Working Inner Loops
+
+- When the prototype calls for a new app shape, migrate the shell first while reusing proven inner surfaces such as file trees, editors, eval panels, and version panels.
+- This lets the product's mental model move toward the design baseline without destabilizing file read/write, eval, and version behavior in the same pass.
+
+### Command Palettes Need Real Safe Actions First
+
+- A command palette can ship early if it starts with safe actions: open skill, generate skill, open settings, copy paths, and run eval.
+- Avoid wiring destructive or ambiguous actions such as restore/version save into the palette before the confirmation and note-taking interaction is designed.
+
+### Search Should Span Human And Filesystem Names
+
+- Skill search should include slug, display name, description, status, and tags.
+- This matches the product's dual identity: local filesystem object plus human-readable notebook entry.
+
+### Column Browsers Need Path State, Not Expansion State
+
+- Finder-style browsers should track the active package-relative path and derive visible columns from the directory chain.
+- This avoids recursive expand/collapse state leaking into the UI model and keeps file selection, directory drilling, and content preview aligned.
+
+### Sorting Rules Belong In The Browser Layer Too
+
+- Even when the backend returns sorted file entries, the frontend browser should enforce the product sorting contract: hide internal files, show directories before files, and prioritize `SKILL.md` among files.
+- This keeps browser-only previews, demo data, and native Tauri data visually consistent.
+
+### Export Flows Should Derive Commands From Real Paths
+
+- Use/export UI should build every path and shell command from the active project root and selected package root.
+- Do not show mock commands or generic placeholders; the user should be able to copy a command and run it immediately.
+
+### Clipboard Feedback Should Be Optimistic
+
+- Browser preview and desktop runtime clipboard permissions can differ.
+- For copy-only affordances, update the UI feedback first, then attempt clipboard writes, so the interface remains responsive even when the permission path is noisy.
+
+## 2026-04-28
+
+### Create Flows Need A Real Preview Workspace
+
+- Preview-before-save should not be simulated with a package that is already written to `.skills/`.
+- Generate into an explicit temporary workspace, return the file tree and file contents to the UI, then copy into `.skills/<slug>/` only after confirmation.
+
+### Commit Should Reuse The Same Package Finalization Path
+
+- A preview commit still needs notebook metadata, generator logs, eval workspace creation, and bootstrap refresh.
+- Keep direct-create and preview-commit behavior aligned by sharing draft file materialization and final package metadata rules.
+
+### Browser Demo Mode Should Exercise The Same API Contract
+
+- Browser-only fallback data is useful only if it follows the same request and response shape as the native Tauri commands.
+- For frontend smoke tests, demo mode should support generate-preview and commit-preview instead of throwing runtime-required errors for the main create path.
+
+### Formal Versions Need Deliberate Friction
+
+- Saving a formal version should be a modal decision with an eval snapshot and a required note, not a casual inline button.
+- Restore should also use a dedicated warning dialog so the user understands it overwrites package files and reloads editor state.
+
+### Quality Gates Should Be Visible Where Versions Are Saved
+
+- Put eval scores, structural checks, suggestions, and version actions in one panel.
+- This makes "run eval before save" feel like the product workflow rather than a backend precondition surfacing as an error.
+
+### Ephemeral Preview Workspaces Need Explicit Discard Semantics
+
+- Preview-before-save flows create real files before the user confirms, so cancellation, replacement, and view unmount must call a backend discard command.
+- Treat browser demo storage the same way as native storage, including `false` responses for already-removed previews, so cleanup logic can be idempotent.
+
+### Commit Flows Need Cleanup After The First Durable Write
+
+- Once a preview commit copies files into `.skills/<slug>/`, every later failure path must remove the partial package and any generated side effects it owns.
+- Keep the preview workspace intact on commit failure so the user can retry or inspect generated content instead of losing the draft.
+
+### Test Execution Should Start With Safe Smoke Validation
+
+- Before wiring arbitrary package scripts, make `tests/*.json` executable as deterministic local smoke checks against package structure and content.
+- This turns a scaffolded test command into a real product loop while preserving a clear security boundary for later shell/script execution.
+
+### Orphan Cleanup Belongs To The Owning Service And Bootstrap
+
+- Temporary workspaces need both active cleanup commands and passive TTL cleanup, because crashes and force quit cannot run frontend unmount handlers.
+- Run TTL cleanup from the service that owns the temp directory, and invoke it during bootstrap plus before creating more temp state.
+
+### Source Ingestion Should Start As Inventory Plus Excerpts
+
+- Local file/directory generation can ship safely before full document parsing by collecting bounded file metadata and UTF-8 excerpts.
+- Attach the generated `references/source-inventory.md` to the preview so users can inspect exactly what source material shaped the draft.
+- Keep the preview manifest summary in sync with response metadata so commit-time responses describe the same source attachments the preview UI showed.
+
+### Empty Placeholder Modules Should Be Removed Once A Direction Is Chosen
+
+- If V1 uses filesystem-backed notebooks as the real persistence path, remove empty SQLite/repository placeholder files instead of leaving them as architectural noise.
+- Public commands should either do real work or disappear from the V1 surface; `not_implemented` responses are useful only during short scaffolding windows.

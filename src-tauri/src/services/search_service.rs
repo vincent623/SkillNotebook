@@ -3,7 +3,7 @@ use crate::storage::filesystem;
 
 pub fn search_packages(query: &str, root_path: Option<&str>) -> Result<Vec<SearchResult>, String> {
     let lowered_query = query.trim().to_lowercase();
-    let results = filesystem::scan_workspace(root_path)?
+    let results = filesystem::scan_project_root(root_path)?
         .packages
         .into_iter()
         .filter(|item| {

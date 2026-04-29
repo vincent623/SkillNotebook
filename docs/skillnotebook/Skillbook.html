@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8"/>
+<title>技能本 · 本地 Claude Skill 工作台</title>
+<meta name="viewport" content="width=1440"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    --bg: #ffffff;
+    --bg-sidebar: #fafaf9;
+    --bg-hover: #f4f4f2;
+    --bg-active: #eeede9;
+    --border: #e7e5e0;
+    --border-faint: #efede9;
+    --ink: #18181b;
+    --ink-muted: #57564e;
+    --ink-faint: #9a988f;
+    --accent: #b8590a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button, input, textarea { font-family: inherit; }
+  button:focus, input:focus, textarea:focus { outline: none; }
+  .text-faint { color: var(--ink-faint); }
+  .text-muted { color: var(--ink-muted); }
+
+  .prose { font-size: 14px; line-height: 1.75; color: var(--ink); max-width: 68ch; }
+  .prose h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; margin: 24px 0 14px; }
+  .prose h2 { font-size: 16.5px; font-weight: 600; letter-spacing: -0.01em; margin: 26px 0 12px; }
+  .prose h3 { font-size: 13px; font-weight: 600; margin: 18px 0 8px; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .prose p { margin: 10px 0; }
+  .prose ul, .prose ol { margin: 10px 0; padding-left: 22px; }
+  .prose li { margin: 5px 0; }
+  .prose code { font-family: var(--font-mono); font-size: 12.5px; padding: 1px 5px; background: var(--bg-sidebar); border: 1px solid var(--border-faint); border-radius: 3px; }
+  .prose pre { background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; overflow: auto; margin: 14px 0; }
+  .prose pre code { background: none; border: none; padding: 0; font-size: 12px; line-height: 1.6; }
+  .prose strong { font-weight: 600; }
+  .prose blockquote { margin: 12px 0; padding: 2px 14px; border-left: 3px solid var(--border); color: var(--ink-muted); font-style: italic; }
+
+  #root { height: 100vh; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; border: 3px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
+</style>
+</head>
+<body>
+
+<template id="__bundler_thumbnail">
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100" height="100" fill="#b8590a"/>
+  <g transform="translate(30,28)" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2" y="2" width="36" height="44" rx="3"/>
+    <path d="M10 14h20M10 22h14M10 30h18"/>
+  </g>
+</svg>
+</template>
+
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script src="src/seed.js"></script>
+<script src="src/store.js"></script>
+<script type="text/babel" src="src/hooks.jsx"></script>
+<script type="text/babel" src="src/library.jsx"></script>
+<script type="text/babel" src="src/generator.jsx"></script>
+
+<script type="text/babel">
+function App() {
+  const repo = useSkillRepo();
+  const [genOpen, setGenOpen] = useState(false);
+  const [cmdOpen, setCmdOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setCmdOpen(o => !o); }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'n') { e.preventDefault(); setGenOpen(true); }
+      if (e.key === 'Escape') { setGenOpen(false); setCmdOpen(false); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  return (
+    <>
+      <Library
+        repo={repo}
+        onNew={() => setGenOpen(true)}
+        onOpenCmd={() => setCmdOpen(true)}
+      />
+      {genOpen && (
+        <Generator
+          onSave={(skill) => repo.addSkill(skill)}
+          onClose={() => setGenOpen(false)}
+        />
+      )}
+      {cmdOpen && (
+        <CommandPalette
+          skills={repo.skills}
+          onSelect={(id) => { repo.selectSkill(id); setCmdOpen(false); }}
+          onNew={() => { setCmdOpen(false); setGenOpen(true); }}
+          onClose={() => setCmdOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
+function CommandPalette({ skills, onSelect, onClose, onNew }) {
+  const [q, setQ] = useState('');
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  const filtered = useMemo(() => {
+    if (!q) return skills.slice(0, 8);
+    const ql = q.toLowerCase();
+    return skills.filter(s =>
+      s.name.toLowerCase().includes(ql) ||
+      s.description.toLowerCase().includes(ql) ||
+      s.tags.some(t => t.includes(ql))
+    ).slice(0, 8);
+  }, [q, skills]);
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)',
+      backdropFilter: 'blur(2px)', display: 'grid', placeItems: 'start center',
+      paddingTop: '15vh', zIndex: 100,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: 560, background: 'var(--bg)', borderRadius: 10,
+        border: '1px solid var(--border)', boxShadow: '0 20px 50px rgba(0,0,0,0.15)', overflow: 'hidden',
+      }}>
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border-faint)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Icon name="search" size={14}/>
+          <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
+            placeholder="搜索 skill…"
+            style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 14, color: 'var(--ink)' }}/>
+          <kbd style={{ fontSize: 10, color: 'var(--ink-faint)', fontFamily: 'var(--font-mono)' }}>ESC</kbd>
+        </div>
+        <div style={{ maxHeight: 380, overflow: 'auto', padding: 8 }}>
+          <div style={{ padding: '6px 10px 2px', fontSize: 10, color: 'var(--ink-faint)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>操作</div>
+          <button onClick={onNew} style={cmdRow}>
+            <Icon name="wand" size={12} style={{ color: 'var(--accent)' }}/>
+            <span style={{ flex: 1, textAlign: 'left' }}>生成新 Skill</span>
+            <kbd style={{ fontSize: 10, color: 'var(--ink-faint)', fontFamily: 'var(--font-mono)' }}>⌘N</kbd>
+          </button>
+          <div style={{ padding: '10px 10px 2px', fontSize: 10, color: 'var(--ink-faint)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Skills</div>
+          {filtered.map(s => (
+            <button key={s.id} onClick={() => onSelect(s.id)} style={cmdRow}>
+              <Icon name="skill" size={12} style={{ color: 'var(--accent)' }}/>
+              <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--ink)' }}>{s.name}</code>
+              <span style={{ fontSize: 11.5, color: 'var(--ink-muted)', flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>· {s.description}</span>
+              <code style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--ink-faint)' }}>v{s.version}</code>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+const cmdRow = {
+  display: 'flex', alignItems: 'center', gap: 10,
+  width: '100%', padding: '8px 10px',
+  background: 'transparent', border: 'none', borderRadius: 6,
+  cursor: 'pointer', fontFamily: 'inherit', marginBottom: 1,
+};
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App/>);
+</script>
+
+</body>
+</html>

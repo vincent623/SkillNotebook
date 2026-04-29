@@ -1,12 +1,11 @@
+pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod domain;
-pub mod repositories;
 pub mod services;
 pub mod state;
 pub mod storage;
 pub mod utils;
-pub mod watchers;
 
 use state::app_state::AppState;
 
@@ -27,17 +26,25 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app::app_bootstrap,
-            commands::workspace::workspace_create,
-            commands::workspace::workspace_open,
-            commands::workspace::workspace_list_recent,
+            commands::project_root::project_root_create,
+            commands::project_root::project_root_open,
+            commands::project_root::project_root_list_recent,
             commands::package::package_list,
             commands::package::package_get,
             commands::package::package_create_from_nl,
+            commands::package::package_generate_preview_from_nl,
+            commands::package::package_generate_preview_from_sources,
+            commands::package::package_commit_preview,
+            commands::package::package_discard_preview,
+            commands::package::package_file_tree,
+            commands::package::package_file_read,
+            commands::package::package_file_write,
             commands::package::package_update,
             commands::search::package_search,
             commands::eval::package_run_eval,
             commands::version::package_list_versions,
             commands::version::package_save_version,
+            commands::version::package_diff_version,
             commands::version::package_restore_version,
             commands::test::package_run_test,
             commands::settings::settings_get,

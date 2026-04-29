@@ -1,0 +1,57 @@
+{
+  "evaluatedAt": "2026-04-17T09:41:06.337021Z",
+  "iteration": 3,
+  "packageId": "pkg-pdf",
+  "runSummary": {
+    "withSkill": {
+      "meanPassRate": 0.3333333432674408,
+      "totalRuns": 1
+    },
+    "withoutSkill": null
+  },
+  "runs": [
+    {
+      "caseId": "case-001",
+      "caseName": "PDF Brief Builder case 1",
+      "evalId": "eval-1",
+      "withSkill": {
+        "expectations": [
+          {
+            "description": "SKILL.md frontmatter validates successfully.",
+            "evidence": "quick_validate.py reported a frontmatter issue.",
+            "expectationId": "exp-1",
+            "passed": false
+          },
+          {
+            "description": "The package describes when to use the skill and what it outputs.",
+            "evidence": "The description still needs an explicit trigger clause.",
+            "expectationId": "exp-2",
+            "passed": false
+          },
+          {
+            "description": "Prompt, example, and eval files are present.",
+            "evidence": "Example files are present under examples/.",
+            "expectationId": "exp-3",
+            "passed": true
+          }
+        ],
+        "metadata": {
+          "durationMs": 50,
+          "totalTokens": 0
+        },
+        "outputLength": 346,
+        "passRate": 0.3333333432674408
+      },
+      "withoutSkill": null
+    }
+  ],
+  "skillName": "pdf-brief-builder",
+  "timing": {
+    "withSkill": {
+      "meanDurationMs": 50,
+      "meanTokens": 0,
+      "totalRuns": 1
+    }
+  },
+  "version": "2.0"
+}

@@ -1,0 +1,33 @@
+{
+  "caseId": "case-001",
+  "caseName": "PDF Brief Builder case 1",
+  "config": {
+    "iteration": 4,
+    "quadrant": "leverage",
+    "skillName": "pdf-brief-builder",
+    "strategy": "structural-review"
+  },
+  "createdAt": "2026-04-17T09:41:46.899487Z",
+  "evalId": "eval-1",
+  "expectations": [
+    {
+      "category": "quality",
+      "critical": true,
+      "description": "SKILL.md frontmatter validates successfully.",
+      "id": "exp-1"
+    },
+    {
+      "category": "structure",
+      "critical": true,
+      "description": "The package describes when to use the skill and what it outputs.",
+      "id": "exp-2"
+    },
+    {
+      "category": "content",
+      "critical": false,
+      "description": "Prompt, example, and eval files are present.",
+      "id": "exp-3"
+    }
+  ],
+  "prompt": "Run the package structural review."
+}

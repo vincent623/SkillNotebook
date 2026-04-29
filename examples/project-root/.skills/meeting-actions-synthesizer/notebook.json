@@ -1,0 +1,85 @@
+{
+  "id": "pkg-meeting",
+  "name": "Meeting Actions Synthesizer",
+  "description": "Draft action-oriented next steps from raw meeting notes and fragments.",
+  "tags": [
+    "meeting",
+    "actions",
+    "ops"
+  ],
+  "status": "draft",
+  "currentVersion": 1,
+  "lastEvalStatus": "problematic",
+  "relatedSkills": [],
+  "bundleCandidates": [],
+  "createdAt": "2026-04-13T17:42:00Z",
+  "updatedAt": "2026-04-17T09:41:37.469039Z",
+  "versions": [
+    {
+      "id": "version-pkg-meeting-v1",
+      "packageId": "pkg-meeting",
+      "versionNumber": 1,
+      "note": null,
+      "snapshotPath": ".skill-notebook/snapshots/pkg-meeting/v1",
+      "evalReportId": "eval-meeting-actions-synthesizer-v2",
+      "isPinned": false,
+      "createdAt": "2026-04-17T09:41:37.469039Z"
+    }
+  ],
+  "evalReports": [
+    {
+      "id": "eval-meeting-actions-synthesizer-v2",
+      "packageId": "pkg-meeting",
+      "completenessScore": 0.4,
+      "clarityScore": 0.1,
+      "executabilityScore": 0.35,
+      "overallStatus": "problematic",
+      "suggestions": [
+        "No YAML frontmatter found",
+        "Add a frontmatter description that clearly says what the skill does and when to use it.",
+        "Add a short 'When not to use' or boundary section so the skill does not over-trigger.",
+        "Add at least one example to demonstrate the expected output shape."
+      ],
+      "details": {
+        "hasSkillMd": true,
+        "hasExamples": false,
+        "hasPrompts": true,
+        "hasScripts": false,
+        "inputDefined": false,
+        "outputDefined": false,
+        "boundariesClear": false,
+        "notes": [
+          "No YAML frontmatter found"
+        ]
+      },
+      "createdAt": "2026-04-17T09:41:33.079122Z"
+    },
+    {
+      "id": "eval-meeting-actions-synthesizer-v1",
+      "packageId": "pkg-meeting",
+      "completenessScore": 0.4,
+      "clarityScore": 0.1,
+      "executabilityScore": 0.35,
+      "overallStatus": "problematic",
+      "suggestions": [
+        "No YAML frontmatter found",
+        "Add a frontmatter description that clearly says what the skill does and when to use it.",
+        "Add a short 'When not to use' or boundary section so the skill does not over-trigger.",
+        "Add at least one example to demonstrate the expected output shape."
+      ],
+      "details": {
+        "hasSkillMd": true,
+        "hasExamples": false,
+        "hasPrompts": true,
+        "hasScripts": false,
+        "inputDefined": false,
+        "outputDefined": false,
+        "boundariesClear": false,
+        "notes": [
+          "No YAML frontmatter found"
+        ]
+      },
+      "createdAt": "2026-04-17T09:36:55.035583Z"
+    }
+  ]
+}

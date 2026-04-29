@@ -1,8 +1,13 @@
 # Docs
 
-Supporting documents, architecture notes, and future implementation details live here.
+Supporting documents and runnable design artifacts live here.
 
-Current top-level product documents stay at the repo root:
+Canonical product and engineering specifications live under `.42cog/`:
 
-- `PRD.md`
-- `TECH_SPEC.md`
+- `.42cog/PRD.md`
+- `.42cog/TECH_SPEC.md`
+- `.42cog/frontend-design-spec.md`
+
+Current runnable UI design baseline:
+
+- `docs/skillnotebook/`

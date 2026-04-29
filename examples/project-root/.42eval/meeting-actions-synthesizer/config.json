@@ -1,0 +1,25 @@
+{
+  "classification": {
+    "confidence": 0.3499999940395355,
+    "humanPractice": "emerging",
+    "modelCapability": "strong",
+    "modelScore": 10,
+    "practiceScore": 40,
+    "quadrant": "leverage",
+    "signals": [
+      {
+        "dimension": "model",
+        "direction": "strong",
+        "keyword": "meeting-actions-synthesizer",
+        "weight": 6
+      }
+    ],
+    "strategy": "structural-review"
+  },
+  "createdAt": "2026-04-17T09:41:33.079122Z",
+  "currentIteration": 2,
+  "skillName": "meeting-actions-synthesizer",
+  "skillPath": "/Volumes/My_data/1-ZBKG-dev/SkillNotebook/examples/project-root/packages/meeting-actions-synthesizer",
+  "updatedAt": "2026-04-17T09:41:33.079122Z",
+  "version": "2.0"
+}

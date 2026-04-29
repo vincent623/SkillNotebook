@@ -1,0 +1,27 @@
+{
+  "expectations": [
+    {
+      "description": "SKILL.md frontmatter validates successfully.",
+      "evidence": "quick_validate.py reported a frontmatter issue.",
+      "expectationId": "exp-1",
+      "passed": false
+    },
+    {
+      "description": "The package describes when to use the skill and what it outputs.",
+      "evidence": "The description still needs an explicit trigger clause.",
+      "expectationId": "exp-2",
+      "passed": false
+    },
+    {
+      "description": "Prompt, example, and eval files are present.",
+      "evidence": "No example files were found.",
+      "expectationId": "exp-3",
+      "passed": false
+    }
+  ],
+  "gradedAt": "2026-04-17T09:41:33.079122Z",
+  "passRate": 0.0,
+  "passedCount": 0,
+  "reasoning": "Structural review run for meeting-actions-synthesizer. Validation: No YAML frontmatter found.",
+  "totalCount": 3
+}

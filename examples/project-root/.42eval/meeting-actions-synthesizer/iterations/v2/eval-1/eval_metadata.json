@@ -1,0 +1,33 @@
+{
+  "caseId": "case-001",
+  "caseName": "Meeting Actions Synthesizer case 1",
+  "config": {
+    "iteration": 2,
+    "quadrant": "leverage",
+    "skillName": "meeting-actions-synthesizer",
+    "strategy": "structural-review"
+  },
+  "createdAt": "2026-04-17T09:41:33.079122Z",
+  "evalId": "eval-1",
+  "expectations": [
+    {
+      "category": "quality",
+      "critical": true,
+      "description": "SKILL.md frontmatter validates successfully.",
+      "id": "exp-1"
+    },
+    {
+      "category": "structure",
+      "critical": true,
+      "description": "The package describes when to use the skill and what it outputs.",
+      "id": "exp-2"
+    },
+    {
+      "category": "content",
+      "critical": false,
+      "description": "Prompt, example, and eval files are present.",
+      "id": "exp-3"
+    }
+  ],
+  "prompt": "Run the package structural review."
+}

@@ -1,0 +1,27 @@
+{
+  "expectations": [
+    {
+      "description": "SKILL.md frontmatter validates successfully.",
+      "evidence": "quick_validate.py reported a frontmatter issue.",
+      "expectationId": "exp-1",
+      "passed": false
+    },
+    {
+      "description": "The package describes when to use the skill and what it outputs.",
+      "evidence": "The description still needs an explicit trigger clause.",
+      "expectationId": "exp-2",
+      "passed": false
+    },
+    {
+      "description": "Prompt, example, and eval files are present.",
+      "evidence": "Example files are present under examples/.",
+      "expectationId": "exp-3",
+      "passed": true
+    }
+  ],
+  "gradedAt": "2026-04-17T09:41:46.899487Z",
+  "passRate": 0.3333333432674408,
+  "passedCount": 1,
+  "reasoning": "Structural review run for pdf-brief-builder. Validation: No YAML frontmatter found.",
+  "totalCount": 3
+}

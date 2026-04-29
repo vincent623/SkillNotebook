@@ -6,4 +6,5 @@ coverage
 Thumbs.db
 src-tauri/gen
 src-tauri/.cargo
+.claude/
 *.log

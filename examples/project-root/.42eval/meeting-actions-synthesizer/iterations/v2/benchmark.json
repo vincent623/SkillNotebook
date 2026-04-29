@@ -1,0 +1,57 @@
+{
+  "evaluatedAt": "2026-04-17T09:41:33.079122Z",
+  "iteration": 2,
+  "packageId": "pkg-meeting",
+  "runSummary": {
+    "withSkill": {
+      "meanPassRate": 0.0,
+      "totalRuns": 1
+    },
+    "withoutSkill": null
+  },
+  "runs": [
+    {
+      "caseId": "case-001",
+      "caseName": "Meeting Actions Synthesizer case 1",
+      "evalId": "eval-1",
+      "withSkill": {
+        "expectations": [
+          {
+            "description": "SKILL.md frontmatter validates successfully.",
+            "evidence": "quick_validate.py reported a frontmatter issue.",
+            "expectationId": "exp-1",
+            "passed": false
+          },
+          {
+            "description": "The package describes when to use the skill and what it outputs.",
+            "evidence": "The description still needs an explicit trigger clause.",
+            "expectationId": "exp-2",
+            "passed": false
+          },
+          {
+            "description": "Prompt, example, and eval files are present.",
+            "evidence": "No example files were found.",
+            "expectationId": "exp-3",
+            "passed": false
+          }
+        ],
+        "metadata": {
+          "durationMs": 47,
+          "totalTokens": 0
+        },
+        "outputLength": 435,
+        "passRate": 0.0
+      },
+      "withoutSkill": null
+    }
+  ],
+  "skillName": "meeting-actions-synthesizer",
+  "timing": {
+    "withSkill": {
+      "meanDurationMs": 47,
+      "meanTokens": 0,
+      "totalRuns": 1
+    }
+  },
+  "version": "2.0"
+}

@@ -1,23 +1,25 @@
 use crate::domain::common::AppResponse;
 use crate::domain::package::{
-    CreatePackageFromNlRequest, CreatePackageFromNlResponse, SearchResult, SkillPackage,
+    CommitPackagePreviewRequest, CreatePackageFromNlRequest, CreatePackageFromNlResponse,
+    CreatePackageFromSourcesRequest, CreatePackagePreviewResponse, DiscardPackagePreviewRequest,
+    PackageFileContent, PackageFileEntry, PackageUpdateRequest, SearchResult, SkillPackage,
 };
 use crate::services::{package_service, skill_create_service};
 use crate::state::app_state::AppState;
-use crate::utils::errors::{not_found, not_implemented};
+use crate::utils::errors::not_found;
 
 #[tauri::command]
 pub async fn package_list(
-    workspace_id: String,
+    project_root_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<AppResponse<Vec<SkillPackage>>, String> {
-    let root_path = state.current_workspace_root()?;
+    let root_path = state.current_project_root()?;
 
     match package_service::list_packages(Some(root_path.as_str())) {
         Ok(packages) => Ok(AppResponse::success(
             packages
                 .into_iter()
-                .filter(|item| item.workspace_id == workspace_id)
+                .filter(|item| item.project_root_id == project_root_id)
                 .collect::<Vec<_>>(),
         )),
         Err(error) => Ok(AppResponse::failure("package_list_failed", error)),
@@ -29,7 +31,7 @@ pub async fn package_get(
     package_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<AppResponse<SkillPackage>, String> {
-    let root_path = state.current_workspace_root()?;
+    let root_path = state.current_project_root()?;
 
     match package_service::get_package(&package_id, Some(root_path.as_str())) {
         Ok(Some(item)) => Ok(AppResponse::success(item)),
@@ -61,7 +63,7 @@ pub async fn package_create_from_nl(
     req: CreatePackageFromNlRequest,
     state: tauri::State<'_, AppState>,
 ) -> Result<AppResponse<CreatePackageFromNlResponse>, String> {
-    let root_path = state.current_workspace_root()?;
+    let root_path = state.current_project_root()?;
 
     match skill_create_service::create_package_from_nl(&req, Some(root_path.as_str())) {
         Ok(response) => Ok(AppResponse::success(response)),
@@ -70,9 +72,120 @@ pub async fn package_create_from_nl(
 }
 
 #[tauri::command]
+pub async fn package_generate_preview_from_nl(
+    req: CreatePackageFromNlRequest,
+    state: tauri::State<'_, AppState>,
+) -> Result<AppResponse<CreatePackagePreviewResponse>, String> {
+    let root_path = state.current_project_root()?;
+
+    match skill_create_service::generate_package_preview_from_nl(&req, Some(root_path.as_str())) {
+        Ok(response) => Ok(AppResponse::success(response)),
+        Err(error) => Ok(AppResponse::failure("package_preview_failed", error)),
+    }
+}
+
+#[tauri::command]
+pub async fn package_generate_preview_from_sources(
+    req: CreatePackageFromSourcesRequest,
+    state: tauri::State<'_, AppState>,
+) -> Result<AppResponse<CreatePackagePreviewResponse>, String> {
+    let root_path = state.current_project_root()?;
+
+    match skill_create_service::generate_package_preview_from_sources(
+        &req,
+        Some(root_path.as_str()),
+    ) {
+        Ok(response) => Ok(AppResponse::success(response)),
+        Err(error) => Ok(AppResponse::failure("package_source_preview_failed", error)),
+    }
+}
+
+#[tauri::command]
+pub async fn package_commit_preview(
+    req: CommitPackagePreviewRequest,
+    state: tauri::State<'_, AppState>,
+) -> Result<AppResponse<CreatePackageFromNlResponse>, String> {
+    let root_path = state.current_project_root()?;
+
+    match skill_create_service::commit_package_preview(&req, Some(root_path.as_str())) {
+        Ok(response) => Ok(AppResponse::success(response)),
+        Err(error) => Ok(AppResponse::failure("package_preview_commit_failed", error)),
+    }
+}
+
+#[tauri::command]
+pub async fn package_discard_preview(
+    req: DiscardPackagePreviewRequest,
+    state: tauri::State<'_, AppState>,
+) -> Result<AppResponse<bool>, String> {
+    let root_path = state.current_project_root()?;
+
+    match skill_create_service::discard_package_preview(&req, Some(root_path.as_str())) {
+        Ok(discarded) => Ok(AppResponse::success(discarded)),
+        Err(error) => Ok(AppResponse::failure(
+            "package_preview_discard_failed",
+            error,
+        )),
+    }
+}
+
+#[tauri::command]
 pub async fn package_update(
-    _package_id: String,
-    _payload: serde_json::Value,
+    package_id: String,
+    payload: PackageUpdateRequest,
+    state: tauri::State<'_, AppState>,
 ) -> Result<AppResponse<SkillPackage>, String> {
-    Ok(not_implemented("package_update"))
+    let root_path = state.current_project_root()?;
+
+    match package_service::update_package(&package_id, &payload, Some(root_path.as_str())) {
+        Ok(package) => Ok(AppResponse::success(package)),
+        Err(error) => Ok(AppResponse::failure("package_update_failed", error)),
+    }
+}
+
+#[tauri::command]
+pub async fn package_file_tree(
+    package_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<AppResponse<Vec<PackageFileEntry>>, String> {
+    let root_path = state.current_project_root()?;
+
+    match package_service::list_package_files(&package_id, Some(root_path.as_str())) {
+        Ok(entries) => Ok(AppResponse::success(entries)),
+        Err(error) => Ok(AppResponse::failure("package_file_tree_failed", error)),
+    }
+}
+
+#[tauri::command]
+pub async fn package_file_read(
+    package_id: String,
+    path: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<AppResponse<PackageFileContent>, String> {
+    let root_path = state.current_project_root()?;
+
+    match package_service::read_package_file(&package_id, &path, Some(root_path.as_str())) {
+        Ok(file) => Ok(AppResponse::success(file)),
+        Err(error) => Ok(AppResponse::failure("package_file_read_failed", error)),
+    }
+}
+
+#[tauri::command]
+pub async fn package_file_write(
+    package_id: String,
+    path: String,
+    content: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<AppResponse<PackageFileContent>, String> {
+    let root_path = state.current_project_root()?;
+
+    match package_service::write_package_file(
+        &package_id,
+        &path,
+        &content,
+        Some(root_path.as_str()),
+    ) {
+        Ok(file) => Ok(AppResponse::success(file)),
+        Err(error) => Ok(AppResponse::failure("package_file_write_failed", error)),
+    }
 }

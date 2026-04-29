@@ -7,13 +7,14 @@ license = ""
 repository = ""
 edition = "2021"
 rust-version = "1.77.2"
+default-run = "skill-notebook"
 
 [lib]
 name = "skill_notebook_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.5.4" }
+tauri-build = { version = "2.5.4", features = [] }
 
 [dependencies]
 log = "0.4"
@@ -21,4 +22,4 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri = { version = "2.10.0", features = ["macos-private-api"] }
 tauri-plugin-log = "2"
-time = { version = "0.3", features = ["formatting", "macros"] }
+time = { version = "0.3", features = ["formatting", "macros", "parsing"] }

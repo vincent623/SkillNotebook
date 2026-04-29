@@ -7,14 +7,14 @@ interface StatusBadgeProps {
 }
 
 const toneLabel: Record<BadgeTone, string> = {
-  draft: "Draft",
-  evaluating: "Evaluating",
-  validated: "Validated",
-  needs_eval: "Needs Eval",
-  archived: "Archived",
-  usable: "Usable",
-  needs_improvement: "Needs Improvement",
-  problematic: "Problematic",
+  draft: "草稿",
+  evaluating: "评估中",
+  validated: "已验证",
+  needs_eval: "待评估",
+  archived: "已归档",
+  usable: "可用",
+  needs_improvement: "待改进",
+  problematic: "有问题",
 };
 
 export function StatusBadge({ status }: StatusBadgeProps) {

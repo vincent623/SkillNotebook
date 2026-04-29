@@ -1,20 +1,23 @@
 use std::env;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
+use time::{Duration as TimeDuration, OffsetDateTime};
 
 use crate::domain::package::{
-    CreatePackageFromNlRequest, CreatePackageFromNlResponse, PackageNotebookDocument, PackageStatus,
+    CommitPackagePreviewRequest, CreatePackageFromNlRequest, CreatePackageFromNlResponse,
+    CreatePackageFromSourcesRequest, CreatePackagePreviewResponse, DiscardPackagePreviewRequest,
+    PackageNotebookDocument, PackagePreviewFile, PackageStatus,
 };
 use crate::services::eval_service;
 use crate::storage::filesystem;
 use crate::utils::ids::slugify;
-use crate::utils::time::{now_iso, today_slug};
+use crate::utils::time::{now_iso, parse_iso, today_slug};
 
 const DEFAULT_CLAUDE_BINARY: &str = "claude";
 const DEFAULT_CLAUDE_TIMEOUT_SECS: u64 = 60;
@@ -24,6 +27,10 @@ const CLAUDE_POLL_INTERVAL_MS: u64 = 100;
 const CREATOR_FALLBACK: &str = "template_fallback";
 const CREATOR_SKILL_CREATE: &str = "skill_create_cli";
 const CREATOR_CLAUDE: &str = "claude_cli";
+const CREATE_PREVIEW_TTL_HOURS: i64 = 24;
+const SOURCE_FILE_LIMIT: usize = 40;
+const SOURCE_EXCERPT_LIMIT_CHARS: usize = 1800;
+const SOURCE_CONTEXT_LIMIT_CHARS: usize = 18_000;
 
 #[derive(Debug, Clone)]
 struct DraftPackage {
@@ -83,13 +90,102 @@ struct GeneratorDraftPayload {
     tags: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatePreviewManifest {
+    preview_id: String,
+    project_root_id: String,
+    name: String,
+    slug: String,
+    description: String,
+    tags: Vec<String>,
+    generator_used: String,
+    generation_summary: String,
+    prompt_log: Option<String>,
+    response_log: Option<String>,
+    created_at: String,
+}
+
+#[derive(Debug, Clone)]
+struct SourceContext {
+    requested_paths: Vec<String>,
+    inventory_markdown: String,
+    generation_context: String,
+}
+
+#[derive(Debug, Clone)]
+struct SourceFileSummary {
+    path: String,
+    size_bytes: u64,
+    kind: String,
+    excerpt: Option<String>,
+}
+
 pub fn create_package_from_nl(
     req: &CreatePackageFromNlRequest,
     root_path: Option<&str>,
 ) -> Result<CreatePackageFromNlResponse, String> {
-    let workspace_root = filesystem::workspace_root_for_id(&req.workspace_id, root_path)?;
+    let project_root_path = filesystem::project_root_for_id(&req.project_root_id, root_path)?;
     let options = resolve_creator_bridge_options();
-    create_package_in_workspace_with_options(&workspace_root, &req.workspace_id, req, &options)
+    create_package_in_workspace_with_options(
+        &project_root_path,
+        &req.project_root_id,
+        req,
+        &options,
+    )
+}
+
+pub fn generate_package_preview_from_nl(
+    req: &CreatePackageFromNlRequest,
+    root_path: Option<&str>,
+) -> Result<CreatePackagePreviewResponse, String> {
+    let project_root_path = filesystem::project_root_for_id(&req.project_root_id, root_path)?;
+    let options = resolve_creator_bridge_options();
+    generate_package_preview_in_workspace_with_options(
+        &project_root_path,
+        &req.project_root_id,
+        req,
+        &options,
+    )
+}
+
+pub fn generate_package_preview_from_sources(
+    req: &CreatePackageFromSourcesRequest,
+    root_path: Option<&str>,
+) -> Result<CreatePackagePreviewResponse, String> {
+    let project_root_path = filesystem::project_root_for_id(&req.project_root_id, root_path)?;
+    let options = resolve_creator_bridge_options();
+    generate_package_preview_from_sources_in_workspace_with_options(
+        &project_root_path,
+        &req.project_root_id,
+        req,
+        &options,
+    )
+}
+
+pub fn commit_package_preview(
+    req: &CommitPackagePreviewRequest,
+    root_path: Option<&str>,
+) -> Result<CreatePackageFromNlResponse, String> {
+    let project_root_path = filesystem::project_root_for_id(&req.project_root_id, root_path)?;
+    commit_package_preview_in_workspace(&project_root_path, req)
+}
+
+pub fn discard_package_preview(
+    req: &DiscardPackagePreviewRequest,
+    root_path: Option<&str>,
+) -> Result<bool, String> {
+    let project_root_path = filesystem::project_root_for_id(&req.project_root_id, root_path)?;
+    discard_package_preview_in_workspace(&project_root_path, req)
+}
+
+pub fn cleanup_stale_package_previews(root_path: &str) -> Result<usize, String> {
+    let project_root_path = PathBuf::from(root_path);
+    cleanup_stale_package_previews_in_workspace_with_now(
+        &project_root_path,
+        TimeDuration::hours(CREATE_PREVIEW_TTL_HOURS),
+        OffsetDateTime::now_utc(),
+    )
 }
 
 pub fn creator_bridge_status() -> serde_json::Value {
@@ -159,50 +255,35 @@ fn resolve_creator_bridge_options() -> CreatorBridgeOptions {
 }
 
 fn create_package_in_workspace_with_options(
-    workspace_root: &Path,
+    project_root_path: &Path,
     _workspace_id: &str,
     req: &CreatePackageFromNlRequest,
     options: &CreatorBridgeOptions,
 ) -> Result<CreatePackageFromNlResponse, String> {
-    let packages_root = workspace_root.join("packages");
+    let packages_root = filesystem::canonical_skills_root(project_root_path);
     filesystem::ensure_directory(&packages_root)?;
 
-    let draft_result = build_initial_draft(req, options)?;
-    let slug = unique_package_slug(&draft_result.draft.slug, &packages_root);
+    let draft_result = prepare_draft_result(project_root_path, req, options)?;
+    let DraftResult {
+        draft,
+        generator_used,
+        generation_summary,
+        prompt_log,
+        response_log,
+    } = draft_result;
+    let slug = draft.slug.clone();
     let package_root = packages_root.join(&slug);
     let package_id = format!("pkg-{}", slug);
     let created_at = now_iso();
 
-    let mut draft = draft_result.draft;
-    draft.slug = slug.clone();
-    if draft.name.trim().is_empty() {
-        draft.name = title_case_slug(&slug).replace("  ", " ");
-    } else {
-        draft.name = sanitize_title(&draft.name);
-    }
-    draft.skill_md = normalize_skill_markdown(
-        &draft.skill_md,
-        &slug,
-        &draft.description,
-        &draft.name,
-        &summarize_goal(
-            &normalize_text(&req.prompt),
-            &normalize_text(req.context.as_deref().unwrap_or_default()),
-            &draft.tags,
-        ),
-        &draft.tags,
-        &draft.expectations,
-        &draft.system_prompt,
-    );
-
     write_draft_files(&package_root, &draft, &slug)?;
     write_generator_log(
-        workspace_root,
+        project_root_path,
         &slug,
-        &draft_result.generator_used,
-        &draft_result.generation_summary,
-        draft_result.prompt_log.as_deref(),
-        draft_result.response_log.as_deref(),
+        &generator_used,
+        &generation_summary,
+        prompt_log.as_deref(),
+        response_log.as_deref(),
     )?;
 
     let mut notebook = PackageNotebookDocument {
@@ -224,7 +305,7 @@ fn create_package_in_workspace_with_options(
     filesystem::save_package_notebook(&package_root, &notebook)?;
 
     let evaluation = eval_service::evaluate_package(
-        workspace_root,
+        project_root_path,
         &package_root,
         &package_id,
         &slug,
@@ -248,7 +329,7 @@ fn create_package_in_workspace_with_options(
         name: notebook.name,
         slug: slug.clone(),
         root_path: package_root.to_string_lossy().to_string(),
-        eval_workspace_path: workspace_root
+        eval_workspace_path: project_root_path
             .join(".42eval")
             .join(&slug)
             .to_string_lossy()
@@ -256,9 +337,629 @@ fn create_package_in_workspace_with_options(
         draft_created: true,
         auto_eval_started: true,
         validation_summary: evaluation.validation_summary,
-        generator_used: draft_result.generator_used,
-        generation_summary: draft_result.generation_summary,
+        generator_used,
+        generation_summary,
     })
+}
+
+fn generate_package_preview_in_workspace_with_options(
+    project_root_path: &Path,
+    project_root_id: &str,
+    req: &CreatePackageFromNlRequest,
+    options: &CreatorBridgeOptions,
+) -> Result<CreatePackagePreviewResponse, String> {
+    let _ = cleanup_stale_package_previews_in_workspace_with_now(
+        project_root_path,
+        TimeDuration::hours(CREATE_PREVIEW_TTL_HOURS),
+        OffsetDateTime::now_utc(),
+    );
+
+    let draft_result = prepare_draft_result(project_root_path, req, options)?;
+    let DraftResult {
+        draft,
+        generator_used,
+        generation_summary,
+        prompt_log,
+        response_log,
+    } = draft_result;
+    let slug = draft.slug.clone();
+    let created_at = now_iso();
+    let preview_id = build_preview_id(&slug);
+    let preview_dir = create_preview_dir(project_root_path, &preview_id)?;
+    let preview_package_root = preview_dir.join("package");
+    let files = draft_preview_files(&draft, &slug)?;
+
+    write_preview_files(&preview_package_root, &files)?;
+    filesystem::write_json_file(
+        &preview_dir.join("preview.json"),
+        &CreatePreviewManifest {
+            preview_id: preview_id.clone(),
+            project_root_id: project_root_id.to_string(),
+            name: draft.name.clone(),
+            slug: slug.clone(),
+            description: draft.description.clone(),
+            tags: draft.tags.clone(),
+            generator_used: generator_used.clone(),
+            generation_summary: generation_summary.clone(),
+            prompt_log,
+            response_log,
+            created_at: created_at.clone(),
+        },
+    )?;
+
+    let file_tree = filesystem::list_package_file_tree(&preview_package_root)?;
+
+    Ok(CreatePackagePreviewResponse {
+        preview_id,
+        project_root_id: project_root_id.to_string(),
+        name: draft.name,
+        slug,
+        description: draft.description,
+        tags: draft.tags,
+        files,
+        file_tree,
+        generator_used,
+        generation_summary,
+        created_at,
+    })
+}
+
+fn generate_package_preview_from_sources_in_workspace_with_options(
+    project_root_path: &Path,
+    project_root_id: &str,
+    req: &CreatePackageFromSourcesRequest,
+    options: &CreatorBridgeOptions,
+) -> Result<CreatePackagePreviewResponse, String> {
+    let source_context = build_source_context(project_root_path, &req.source_paths)?;
+    let source_goal = req
+        .prompt
+        .as_deref()
+        .map(normalize_text)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            format!(
+                "Create a reusable skill from {} local source path(s).",
+                source_context.requested_paths.len()
+            )
+        });
+    let mut context_parts = Vec::new();
+    if let Some(context) = req
+        .context
+        .as_deref()
+        .map(normalize_text)
+        .filter(|value| !value.trim().is_empty())
+    {
+        context_parts.push(format!("User notes:\n{}", context));
+    }
+    context_parts.push(source_context.generation_context.clone());
+
+    let synthetic_req = CreatePackageFromNlRequest {
+        project_root_id: project_root_id.to_string(),
+        prompt: source_goal,
+        context: Some(context_parts.join("\n\n")),
+    };
+    let mut response = generate_package_preview_in_workspace_with_options(
+        project_root_path,
+        project_root_id,
+        &synthetic_req,
+        options,
+    )?;
+    let inventory_file = PackagePreviewFile {
+        path: "references/source-inventory.md".to_string(),
+        content: source_context.inventory_markdown,
+        encoding: "utf-8".to_string(),
+    };
+    let preview_root = preview_dir(project_root_path, &safe_preview_id(&response.preview_id)?);
+    let preview_package_root = preview_root.join("package");
+    filesystem::write_text_file(
+        &preview_package_root.join(&inventory_file.path),
+        &inventory_file.content,
+    )?;
+    response.files.push(inventory_file);
+    response.file_tree = filesystem::list_package_file_tree(&preview_package_root)?;
+    response.generation_summary = format!(
+        "{} Source inventory attached from {} local path(s).",
+        response.generation_summary,
+        source_context.requested_paths.len()
+    );
+    let manifest_path = preview_root.join("preview.json");
+    let mut manifest = read_preview_manifest(&manifest_path)?;
+    manifest.generation_summary = response.generation_summary.clone();
+    filesystem::write_json_file(&manifest_path, &manifest)?;
+
+    Ok(response)
+}
+
+fn commit_package_preview_in_workspace(
+    project_root_path: &Path,
+    req: &CommitPackagePreviewRequest,
+) -> Result<CreatePackageFromNlResponse, String> {
+    let preview_id = safe_preview_id(&req.preview_id)?;
+    let preview_root = preview_dir(project_root_path, &preview_id);
+    let preview_package_root = preview_root.join("package");
+    let manifest_path = preview_root.join("preview.json");
+    let manifest = read_preview_manifest(&manifest_path)?;
+
+    if manifest.project_root_id != req.project_root_id {
+        return Err("preview belongs to a different project root".to_string());
+    }
+
+    if !preview_package_root.is_dir() {
+        return Err(format!(
+            "preview package directory is missing: {}",
+            preview_package_root.display()
+        ));
+    }
+
+    let packages_root = filesystem::canonical_skills_root(project_root_path);
+    filesystem::ensure_directory(&packages_root)?;
+    let package_root = packages_root.join(&manifest.slug);
+
+    if package_root.exists() {
+        return Err(format!(
+            "package `{}` already exists. Regenerate the preview to allocate a new slug.",
+            manifest.slug
+        ));
+    }
+
+    if let Err(error) = filesystem::copy_directory_recursive(&preview_package_root, &package_root) {
+        std::fs::remove_dir_all(&package_root).ok();
+        return Err(error);
+    }
+
+    let eval_workspace_path = project_root_path.join(".42eval").join(&manifest.slug);
+    let generator_log_dir = project_root_path
+        .join(".skill-notebook")
+        .join("generator-runs")
+        .join(&manifest.slug);
+    let commit_result = (|| {
+        write_generator_log(
+            project_root_path,
+            &manifest.slug,
+            &manifest.generator_used,
+            &manifest.generation_summary,
+            manifest.prompt_log.as_deref(),
+            manifest.response_log.as_deref(),
+        )?;
+
+        let package_id = format!("pkg-{}", manifest.slug);
+        let created_at = now_iso();
+        let mut notebook = PackageNotebookDocument {
+            id: package_id.clone(),
+            name: manifest.name.clone(),
+            description: manifest.description.clone(),
+            tags: manifest.tags.clone(),
+            status: PackageStatus::Draft,
+            current_version: 0,
+            last_eval_status: None,
+            related_skills: Vec::new(),
+            bundle_candidates: Vec::new(),
+            created_at: created_at.clone(),
+            updated_at: created_at.clone(),
+            versions: Vec::new(),
+            eval_reports: Vec::new(),
+        };
+
+        filesystem::save_package_notebook(&package_root, &notebook)?;
+
+        let evaluation = eval_service::evaluate_package(
+            project_root_path,
+            &package_root,
+            &package_id,
+            &manifest.slug,
+            &manifest.name,
+            &manifest.description,
+            1,
+        )?;
+
+        notebook.last_eval_status = Some(evaluation.report.overall_status.clone());
+        notebook.status = match evaluation.suggested_status {
+            PackageStatus::Validated => PackageStatus::NeedsEval,
+            other => other,
+        };
+        notebook.updated_at = now_iso();
+        notebook.eval_reports.push(evaluation.report.clone());
+
+        filesystem::save_package_notebook(&package_root, &notebook)?;
+
+        Ok(CreatePackageFromNlResponse {
+            package_id,
+            name: notebook.name,
+            slug: manifest.slug.clone(),
+            root_path: package_root.to_string_lossy().to_string(),
+            eval_workspace_path: eval_workspace_path.to_string_lossy().to_string(),
+            draft_created: true,
+            auto_eval_started: true,
+            validation_summary: evaluation.validation_summary,
+            generator_used: manifest.generator_used.clone(),
+            generation_summary: manifest.generation_summary.clone(),
+        })
+    })();
+
+    match commit_result {
+        Ok(response) => {
+            std::fs::remove_dir_all(&preview_root).ok();
+            Ok(response)
+        }
+        Err(error) => {
+            std::fs::remove_dir_all(&package_root).ok();
+            std::fs::remove_dir_all(&eval_workspace_path).ok();
+            std::fs::remove_dir_all(&generator_log_dir).ok();
+            Err(error)
+        }
+    }
+}
+
+fn discard_package_preview_in_workspace(
+    project_root_path: &Path,
+    req: &DiscardPackagePreviewRequest,
+) -> Result<bool, String> {
+    let preview_id = safe_preview_id(&req.preview_id)?;
+    let preview_root = preview_dir(project_root_path, &preview_id);
+
+    if !preview_root.exists() {
+        return Ok(false);
+    }
+
+    let manifest_path = preview_root.join("preview.json");
+    if manifest_path.exists() {
+        let manifest = read_preview_manifest(&manifest_path)?;
+        if manifest.project_root_id != req.project_root_id {
+            return Err("preview belongs to a different project root".to_string());
+        }
+    }
+
+    std::fs::remove_dir_all(&preview_root).map_err(|error| {
+        format!(
+            "failed to discard preview {}: {}",
+            preview_root.display(),
+            error
+        )
+    })?;
+    Ok(true)
+}
+
+fn cleanup_stale_package_previews_in_workspace_with_now(
+    project_root_path: &Path,
+    ttl: TimeDuration,
+    now: OffsetDateTime,
+) -> Result<usize, String> {
+    let previews_root = project_root_path
+        .join(".skill-notebook")
+        .join("create-previews");
+    if !previews_root.exists() {
+        return Ok(0);
+    }
+
+    let mut removed = 0;
+    for entry in std::fs::read_dir(&previews_root)
+        .map_err(|error| format!("failed to read {}: {}", previews_root.display(), error))?
+    {
+        let path = entry
+            .map_err(|error| format!("failed to inspect preview entry: {}", error))?
+            .path();
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|error| format!("failed to inspect {}: {}", path.display(), error))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+
+        if preview_workspace_is_stale(&path, ttl, now, &metadata) {
+            std::fs::remove_dir_all(&path).map_err(|error| {
+                format!(
+                    "failed to remove stale preview {}: {}",
+                    path.display(),
+                    error
+                )
+            })?;
+            removed += 1;
+        }
+    }
+
+    Ok(removed)
+}
+
+fn preview_workspace_is_stale(
+    preview_root: &Path,
+    ttl: TimeDuration,
+    now: OffsetDateTime,
+    metadata: &std::fs::Metadata,
+) -> bool {
+    let manifest_path = preview_root.join("preview.json");
+    if manifest_path.exists() {
+        if let Ok(manifest) = read_preview_manifest(&manifest_path) {
+            if let Ok(created_at) = parse_iso(&manifest.created_at) {
+                return now - created_at > ttl;
+            }
+        }
+    }
+
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .map(|age| age > ttl.unsigned_abs())
+        .unwrap_or(false)
+}
+
+fn build_source_context(
+    project_root_path: &Path,
+    source_paths: &[String],
+) -> Result<SourceContext, String> {
+    let requested = source_paths
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if requested.is_empty() {
+        return Err("at least one source file or directory path is required".to_string());
+    }
+
+    let mut requested_paths = Vec::new();
+    let mut files = Vec::new();
+    for raw_path in requested {
+        let source_path = resolve_source_path(project_root_path, raw_path)?;
+        requested_paths.push(display_source_path(project_root_path, &source_path));
+        collect_source_files(project_root_path, &source_path, &mut files)?;
+        if files.len() >= SOURCE_FILE_LIMIT {
+            break;
+        }
+    }
+
+    if files.is_empty() {
+        return Err("no source files were found in the provided paths".to_string());
+    }
+
+    let included_count = files.len();
+    let excerpt_count = files.iter().filter(|file| file.excerpt.is_some()).count();
+    let mut inventory = String::new();
+    inventory.push_str("# Source Inventory\n\n");
+    inventory.push_str("This preview was generated from local source paths.\n\n");
+    inventory.push_str("## Requested Paths\n\n");
+    for path in &requested_paths {
+        inventory.push_str(&format!("- `{}`\n", path));
+    }
+    inventory.push_str("\n## Included Files\n\n");
+    for file in &files {
+        inventory.push_str(&format!(
+            "- `{}` ({}, {})\n",
+            file.path,
+            format_size(file.size_bytes),
+            file.kind
+        ));
+    }
+    inventory.push_str("\n## Text Excerpts\n\n");
+    for file in files.iter().filter(|file| file.excerpt.is_some()) {
+        inventory.push_str(&format!("### `{}`\n\n", file.path));
+        inventory.push_str("```text\n");
+        inventory.push_str(file.excerpt.as_deref().unwrap_or_default());
+        inventory.push_str("\n```\n\n");
+    }
+    if excerpt_count == 0 {
+        inventory.push_str(
+            "No UTF-8 text excerpts were available; generation used file names and metadata.\n",
+        );
+    }
+
+    let generation_context = truncate_chars(
+        &format!(
+            "Local source inventory:\n\n{}\n\nUse these files as source material. Build a reusable skill that helps repeat the workflow implied by the paths, filenames, and excerpts. Preserve uncertainty when source content is unavailable.",
+            inventory
+        ),
+        SOURCE_CONTEXT_LIMIT_CHARS,
+    );
+    let inventory_markdown = format!(
+        "{}\n---\n\nIncluded {} file(s); {} file(s) contributed text excerpts.\n",
+        inventory, included_count, excerpt_count
+    );
+
+    Ok(SourceContext {
+        requested_paths,
+        inventory_markdown,
+        generation_context,
+    })
+}
+
+fn resolve_source_path(project_root_path: &Path, raw_path: &str) -> Result<PathBuf, String> {
+    let candidate = Path::new(raw_path);
+    let path = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        project_root_path.join(candidate)
+    };
+
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|error| format!("source path not found `{}`: {}", raw_path, error))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!("source path cannot be a symlink: {}", raw_path));
+    }
+    if !metadata.is_file() && !metadata.is_dir() {
+        return Err(format!(
+            "source path is not a file or directory: {}",
+            raw_path
+        ));
+    }
+
+    Ok(path)
+}
+
+fn collect_source_files(
+    project_root_path: &Path,
+    path: &Path,
+    files: &mut Vec<SourceFileSummary>,
+) -> Result<(), String> {
+    if files.len() >= SOURCE_FILE_LIMIT {
+        return Ok(());
+    }
+
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {}", path.display(), error))?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if metadata.is_file() {
+        files.push(summarize_source_file(project_root_path, path, &metadata));
+        return Ok(());
+    }
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+
+    let mut entries = std::fs::read_dir(path)
+        .map_err(|error| {
+            format!(
+                "failed to read source directory {}: {}",
+                path.display(),
+                error
+            )
+        })?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.to_string_lossy().cmp(&right.to_string_lossy()));
+
+    for entry in entries {
+        if files.len() >= SOURCE_FILE_LIMIT {
+            break;
+        }
+        let name = entry
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if should_skip_source_entry(&name) {
+            continue;
+        }
+        collect_source_files(project_root_path, &entry, files)?;
+    }
+
+    Ok(())
+}
+
+fn summarize_source_file(
+    project_root_path: &Path,
+    path: &Path,
+    metadata: &std::fs::Metadata,
+) -> SourceFileSummary {
+    let kind = path
+        .extension()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "file".to_string());
+    let excerpt = if is_text_source_file(path) {
+        std::fs::read_to_string(path)
+            .ok()
+            .map(|content| truncate_chars(&content, SOURCE_EXCERPT_LIMIT_CHARS))
+    } else {
+        None
+    };
+
+    SourceFileSummary {
+        path: display_source_path(project_root_path, path),
+        size_bytes: metadata.len(),
+        kind,
+        excerpt,
+    }
+}
+
+fn should_skip_source_entry(name: &str) -> bool {
+    name.starts_with('.')
+        || matches!(
+            name,
+            "node_modules"
+                | "target"
+                | "dist"
+                | "build"
+                | ".git"
+                | ".42eval"
+                | ".skill-notebook"
+                | ".skills"
+        )
+}
+
+fn is_text_source_file(path: &Path) -> bool {
+    let Some(extension) = path
+        .extension()
+        .map(|value| value.to_string_lossy().to_lowercase())
+    else {
+        return false;
+    };
+
+    matches!(
+        extension.as_str(),
+        "md" | "txt"
+            | "json"
+            | "yaml"
+            | "yml"
+            | "csv"
+            | "ts"
+            | "tsx"
+            | "js"
+            | "jsx"
+            | "py"
+            | "rs"
+            | "sh"
+            | "toml"
+            | "html"
+            | "css"
+    )
+}
+
+fn display_source_path(project_root_path: &Path, path: &Path) -> String {
+    path.strip_prefix(project_root_path)
+        .map(|value| format!("./{}", value.to_string_lossy().replace('\\', "/")))
+        .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/"))
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+fn truncate_chars(value: &str, limit: usize) -> String {
+    let mut truncated = value.chars().take(limit).collect::<String>();
+    if value.chars().count() > limit {
+        truncated.push_str("...");
+    }
+    truncated
+}
+
+fn prepare_draft_result(
+    project_root_path: &Path,
+    req: &CreatePackageFromNlRequest,
+    options: &CreatorBridgeOptions,
+) -> Result<DraftResult, String> {
+    let packages_root = filesystem::canonical_skills_root(project_root_path);
+    filesystem::ensure_directory(&packages_root)?;
+
+    let mut draft_result = build_initial_draft(req, options)?;
+    let slug = unique_package_slug(&draft_result.draft.slug, &packages_root);
+    draft_result.draft.slug = slug.clone();
+    if draft_result.draft.name.trim().is_empty() {
+        draft_result.draft.name = title_case_slug(&slug).replace("  ", " ");
+    } else {
+        draft_result.draft.name = sanitize_title(&draft_result.draft.name);
+    }
+    draft_result.draft.skill_md = normalize_skill_markdown(
+        &draft_result.draft.skill_md,
+        &slug,
+        &draft_result.draft.description,
+        &draft_result.draft.name,
+        &summarize_goal(
+            &normalize_text(&req.prompt),
+            &normalize_text(req.context.as_deref().unwrap_or_default()),
+            &draft_result.draft.tags,
+        ),
+        &draft_result.draft.tags,
+        &draft_result.draft.expectations,
+        &draft_result.draft.system_prompt,
+    );
+
+    Ok(draft_result)
 }
 
 fn build_initial_draft(
@@ -505,8 +1206,8 @@ fn call_skill_create_text(prompt: &str, options: &CreatorBridgeOptions) -> Resul
         if started_at.elapsed() >= timeout {
             child.kill().ok();
             child.wait().ok();
-            let stderr =
-                read_child_stream(child.stderr.take(), "skill-create", "stderr").unwrap_or_default();
+            let stderr = read_child_stream(child.stderr.take(), "skill-create", "stderr")
+                .unwrap_or_default();
             let details = if stderr.trim().is_empty() {
                 String::new()
             } else {
@@ -712,59 +1413,137 @@ fn build_skill_md(
     )
 }
 
-fn write_draft_files(package_root: &Path, draft: &DraftPackage, slug: &str) -> Result<(), String> {
-    filesystem::write_text_file(&package_root.join("SKILL.md"), &draft.skill_md)?;
-    filesystem::write_text_file(
-        &package_root.join("prompts").join("system.md"),
-        &draft.system_prompt,
-    )?;
-    filesystem::write_text_file(
-        &package_root.join("prompts").join("task.md"),
-        &draft.task_prompt,
-    )?;
-    filesystem::write_text_file(
-        &package_root.join("examples").join("example-01.md"),
-        &draft.example_markdown,
-    )?;
-    filesystem::write_text_file(
-        &package_root.join("tests").join("smoke-test.json"),
-        &format!(
-            "{}\n",
-            serde_json::to_string_pretty(&json!({
-                "name": "smoke-test",
-                "package": slug,
+fn build_preview_id(slug: &str) -> String {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let raw = format!("preview-{}-{}-{}", slug, std::process::id(), nonce);
+    slugify(&raw)
+}
+
+fn safe_preview_id(value: &str) -> Result<String, String> {
+    let normalized = slugify(value);
+    if normalized.is_empty() || normalized != value {
+        return Err("invalid preview id".to_string());
+    }
+
+    Ok(normalized)
+}
+
+fn preview_dir(project_root_path: &Path, preview_id: &str) -> PathBuf {
+    project_root_path
+        .join(".skill-notebook")
+        .join("create-previews")
+        .join(preview_id)
+}
+
+fn create_preview_dir(project_root_path: &Path, preview_id: &str) -> Result<PathBuf, String> {
+    let preview_id = safe_preview_id(preview_id)?;
+    let path = preview_dir(project_root_path, &preview_id);
+
+    if path.exists() {
+        std::fs::remove_dir_all(&path)
+            .map_err(|error| format!("failed to reset preview {}: {}", path.display(), error))?;
+    }
+
+    filesystem::ensure_directory(&path.join("package"))?;
+    Ok(path)
+}
+
+fn read_preview_manifest(path: &Path) -> Result<CreatePreviewManifest, String> {
+    let content = std::fs::read_to_string(path).map_err(|error| {
+        format!(
+            "failed to read preview manifest {}: {}",
+            path.display(),
+            error
+        )
+    })?;
+    serde_json::from_str(&content).map_err(|error| {
+        format!(
+            "failed to parse preview manifest {}: {}",
+            path.display(),
+            error
+        )
+    })
+}
+
+fn draft_preview_files(
+    draft: &DraftPackage,
+    slug: &str,
+) -> Result<Vec<PackagePreviewFile>, String> {
+    let smoke_test = serde_json::to_string_pretty(&json!({
+        "name": "smoke-test",
+        "package": slug,
+        "prompt": draft.smoke_prompt,
+        "expectedOutput": draft.expected_output,
+        "checks": draft.expectations,
+    }))
+    .map_err(|error| format!("failed to serialize smoke test: {}", error))?;
+
+    let evals = serde_json::to_string_pretty(&json!({
+        "skill_name": slug,
+        "evals": [
+            {
+                "id": 1,
                 "prompt": draft.smoke_prompt,
-                "expectedOutput": draft.expected_output,
-                "checks": draft.expectations,
-            }))
-            .map_err(|error| format!("failed to serialize smoke test: {}", error))?
-        ),
-    )?;
-    filesystem::write_text_file(
-        &package_root.join("evals").join("evals.json"),
-        &format!(
-            "{}\n",
-            serde_json::to_string_pretty(&json!({
-                "skill_name": slug,
-                "evals": [
-                    {
-                        "id": 1,
-                        "prompt": draft.smoke_prompt,
-                        "expected_output": draft.expected_output,
-                        "files": [],
-                        "expectations": draft.expectations,
-                    }
-                ]
-            }))
-            .map_err(|error| format!("failed to serialize eval definitions: {}", error))?
-        ),
-    )?;
+                "expected_output": draft.expected_output,
+                "files": [],
+                "expectations": draft.expectations,
+            }
+        ]
+    }))
+    .map_err(|error| format!("failed to serialize eval definitions: {}", error))?;
+
+    Ok(vec![
+        PackagePreviewFile {
+            path: "SKILL.md".to_string(),
+            content: draft.skill_md.clone(),
+            encoding: "utf-8".to_string(),
+        },
+        PackagePreviewFile {
+            path: "prompts/system.md".to_string(),
+            content: draft.system_prompt.clone(),
+            encoding: "utf-8".to_string(),
+        },
+        PackagePreviewFile {
+            path: "prompts/task.md".to_string(),
+            content: draft.task_prompt.clone(),
+            encoding: "utf-8".to_string(),
+        },
+        PackagePreviewFile {
+            path: "examples/example-01.md".to_string(),
+            content: draft.example_markdown.clone(),
+            encoding: "utf-8".to_string(),
+        },
+        PackagePreviewFile {
+            path: "tests/smoke-test.json".to_string(),
+            content: format!("{}\n", smoke_test),
+            encoding: "utf-8".to_string(),
+        },
+        PackagePreviewFile {
+            path: "evals/evals.json".to_string(),
+            content: format!("{}\n", evals),
+            encoding: "utf-8".to_string(),
+        },
+    ])
+}
+
+fn write_preview_files(root: &Path, files: &[PackagePreviewFile]) -> Result<(), String> {
+    for file in files {
+        filesystem::write_text_file(&root.join(&file.path), &file.content)?;
+    }
 
     Ok(())
 }
 
+fn write_draft_files(package_root: &Path, draft: &DraftPackage, slug: &str) -> Result<(), String> {
+    let files = draft_preview_files(draft, slug)?;
+    write_preview_files(package_root, &files)
+}
+
 fn write_generator_log(
-    workspace_root: &Path,
+    project_root_path: &Path,
     slug: &str,
     generator_used: &str,
     generation_summary: &str,
@@ -775,7 +1554,7 @@ fn write_generator_log(
         return Ok(());
     }
 
-    let path = workspace_root
+    let path = project_root_path
         .join(".skill-notebook")
         .join("generator-runs")
         .join(slug)
@@ -1212,16 +1991,24 @@ mod tests {
     use std::{env, fs};
 
     use crate::storage::filesystem;
-    use crate::utils::time::now_iso;
+    use crate::utils::time::{now_iso, parse_iso};
+    use serde_json::json;
+    use time::Duration as TimeDuration;
 
     use super::{
-        create_package_in_workspace_with_options, creator_bridge_status, unique_package_slug,
-        CreatePackageFromNlRequest, CreatorBridgeOptions, CreatorMode, CREATOR_CLAUDE,
-        CREATOR_FALLBACK, CREATOR_SKILL_CREATE, DEFAULT_CLAUDE_BINARY, DEFAULT_CLAUDE_TIMEOUT_SECS,
-        DEFAULT_SKILL_CREATE_BINARY, DEFAULT_SKILL_CREATE_TIMEOUT_SECS,
+        cleanup_stale_package_previews_in_workspace_with_now, commit_package_preview_in_workspace,
+        create_package_in_workspace_with_options, creator_bridge_status,
+        discard_package_preview_in_workspace,
+        generate_package_preview_from_sources_in_workspace_with_options,
+        generate_package_preview_in_workspace_with_options, read_preview_manifest,
+        unique_package_slug, CommitPackagePreviewRequest, CreatePackageFromNlRequest,
+        CreatePackageFromSourcesRequest, CreatorBridgeOptions, CreatorMode,
+        DiscardPackagePreviewRequest, CREATOR_CLAUDE, CREATOR_FALLBACK, CREATOR_SKILL_CREATE,
+        DEFAULT_CLAUDE_BINARY, DEFAULT_CLAUDE_TIMEOUT_SECS, DEFAULT_SKILL_CREATE_BINARY,
+        DEFAULT_SKILL_CREATE_TIMEOUT_SECS,
     };
 
-    fn make_temp_workspace(name: &str) -> PathBuf {
+    fn make_temp_project_root(name: &str) -> PathBuf {
         let root = env::temp_dir().join(format!(
             "skill-notebook-create-{}-{}",
             name,
@@ -1231,17 +2018,17 @@ mod tests {
             fs::remove_dir_all(&root).ok();
         }
 
-        fs::create_dir_all(root.join(".skill-notebook")).expect("workspace config dir");
-        fs::create_dir_all(root.join("packages")).expect("packages dir");
+        fs::create_dir_all(root.join(".skill-notebook")).expect("project_root config dir");
+        fs::create_dir_all(filesystem::canonical_skills_root(&root)).expect("skills dir");
         filesystem::write_text_file(
             &root.join(".skill-notebook").join("config.json"),
             &format!(
-                "{{\"id\":\"workspace-test\",\"name\":\"Test Workspace\",\"createdAt\":\"{}\",\"updatedAt\":\"{}\"}}",
+                "{{\"id\":\"project_root-test\",\"name\":\"Test ProjectRoot\",\"createdAt\":\"{}\",\"updatedAt\":\"{}\"}}",
                 now_iso(),
                 now_iso()
             ),
         )
-        .expect("workspace config");
+        .expect("project_root config");
         root
     }
 
@@ -1256,13 +2043,27 @@ mod tests {
         }
     }
 
+    fn set_preview_created_at(preview_root: &PathBuf, created_at: &str) {
+        let manifest_path = preview_root.join("preview.json");
+        let content = fs::read_to_string(&manifest_path).expect("read preview manifest");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&content).expect("parse preview manifest");
+        manifest["createdAt"] = json!(created_at);
+        filesystem::write_text_file(
+            &manifest_path,
+            &format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
+        )
+        .expect("write preview manifest");
+    }
+
     #[test]
     fn allocates_unique_slugs_when_the_base_exists() {
-        let root = make_temp_workspace("slug");
-        fs::create_dir_all(root.join("packages").join("meeting-actions"))
+        let root = make_temp_project_root("slug");
+        fs::create_dir_all(filesystem::canonical_skills_root(&root).join("meeting-actions"))
             .expect("existing package");
 
-        let slug = unique_package_slug("meeting-actions", &root.join("packages"));
+        let slug =
+            unique_package_slug("meeting-actions", &filesystem::canonical_skills_root(&root));
 
         assert_eq!(slug, "meeting-actions-2");
         fs::remove_dir_all(root).ok();
@@ -1270,9 +2071,9 @@ mod tests {
 
     #[test]
     fn creates_a_real_package_from_template_mode() {
-        let root = make_temp_workspace("create");
+        let root = make_temp_project_root("create");
         let request = CreatePackageFromNlRequest {
-            workspace_id: "workspace-test".to_string(),
+            project_root_id: "project_root-test".to_string(),
             prompt: "Turn customer interview notes into recurring action items and themes."
                 .to_string(),
             context: Some("The package should help with synthesis and follow-up.".to_string()),
@@ -1280,14 +2081,13 @@ mod tests {
 
         let response = create_package_in_workspace_with_options(
             &root,
-            "workspace-test",
+            "project_root-test",
             &request,
             &template_options(),
         )
         .expect("package created");
 
-        assert!(root
-            .join("packages")
+        assert!(filesystem::canonical_skills_root(&root)
             .join(&response.slug)
             .join("SKILL.md")
             .exists());
@@ -1302,8 +2102,254 @@ mod tests {
     }
 
     #[test]
+    fn previews_a_generated_package_before_committing_it() {
+        let root = make_temp_project_root("preview");
+        let request = CreatePackageFromNlRequest {
+            project_root_id: "project_root-test".to_string(),
+            prompt: "Create a reusable skill for extracting contract renewal risks.".to_string(),
+            context: Some("The output should be a checklist with evidence notes.".to_string()),
+        };
+
+        let preview = generate_package_preview_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &template_options(),
+        )
+        .expect("preview created");
+        let preview_root = root
+            .join(".skill-notebook")
+            .join("create-previews")
+            .join(&preview.preview_id);
+
+        assert_eq!(preview.project_root_id, "project_root-test");
+        assert!(preview.files.iter().any(|file| file.path == "SKILL.md"));
+        assert!(preview_root.join("package").join("SKILL.md").exists());
+        assert!(!filesystem::canonical_skills_root(&root)
+            .join(&preview.slug)
+            .exists());
+
+        let response = commit_package_preview_in_workspace(
+            &root,
+            &CommitPackagePreviewRequest {
+                project_root_id: "project_root-test".to_string(),
+                preview_id: preview.preview_id.clone(),
+            },
+        )
+        .expect("preview committed");
+
+        assert_eq!(response.slug, preview.slug);
+        assert!(filesystem::canonical_skills_root(&root)
+            .join(&response.slug)
+            .join("SKILL.md")
+            .exists());
+        assert!(root
+            .join(".42eval")
+            .join(&response.slug)
+            .join("config.json")
+            .exists());
+        assert!(!preview_root.exists());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn discards_a_generated_preview_without_creating_a_package() {
+        let root = make_temp_project_root("preview-discard");
+        let request = CreatePackageFromNlRequest {
+            project_root_id: "project_root-test".to_string(),
+            prompt: "Create a reusable skill for reviewing support escalations.".to_string(),
+            context: None,
+        };
+
+        let preview = generate_package_preview_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &template_options(),
+        )
+        .expect("preview created");
+        let preview_root = root
+            .join(".skill-notebook")
+            .join("create-previews")
+            .join(&preview.preview_id);
+
+        let discarded = discard_package_preview_in_workspace(
+            &root,
+            &DiscardPackagePreviewRequest {
+                project_root_id: "project_root-test".to_string(),
+                preview_id: preview.preview_id.clone(),
+            },
+        )
+        .expect("preview discarded");
+
+        assert!(discarded);
+        assert!(!preview_root.exists());
+        assert!(!filesystem::canonical_skills_root(&root)
+            .join(&preview.slug)
+            .exists());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn previews_a_package_from_local_source_paths() {
+        let root = make_temp_project_root("preview-sources");
+        let source_dir = root.join("research-notes");
+        filesystem::write_text_file(
+            &source_dir.join("interview-notes.md"),
+            "# Interview Notes\n\nUsers need clearer onboarding examples and evidence-linked insights.\n",
+        )
+        .expect("source note");
+        filesystem::write_text_file(
+            &source_dir.join("raw.json"),
+            "{\"theme\":\"onboarding\",\"need\":\"examples\"}\n",
+        )
+        .expect("source json");
+        let request = CreatePackageFromSourcesRequest {
+            project_root_id: "project_root-test".to_string(),
+            source_paths: vec!["research-notes".to_string()],
+            prompt: Some(
+                "Create a skill for turning research notes into insight cards.".to_string(),
+            ),
+            context: Some("Keep evidence visible in the output.".to_string()),
+        };
+
+        let preview = generate_package_preview_from_sources_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &template_options(),
+        )
+        .expect("source preview created");
+        let inventory = preview
+            .files
+            .iter()
+            .find(|file| file.path == "references/source-inventory.md")
+            .expect("inventory reference");
+
+        assert!(inventory.content.contains("interview-notes.md"));
+        assert!(inventory.content.contains("evidence-linked insights"));
+        assert!(preview
+            .generation_summary
+            .contains("Source inventory attached"));
+        let manifest = read_preview_manifest(
+            &root
+                .join(".skill-notebook")
+                .join("create-previews")
+                .join(&preview.preview_id)
+                .join("preview.json"),
+        )
+        .expect("preview manifest");
+        assert_eq!(manifest.generation_summary, preview.generation_summary);
+        assert!(preview
+            .file_tree
+            .iter()
+            .any(|entry| entry.path == "references" && entry.is_directory));
+        assert!(!filesystem::canonical_skills_root(&root)
+            .join(&preview.slug)
+            .exists());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn failed_preview_commit_cleans_partial_package_and_keeps_preview() {
+        let root = make_temp_project_root("preview-commit-fail");
+        let request = CreatePackageFromNlRequest {
+            project_root_id: "project_root-test".to_string(),
+            prompt: "Create a reusable skill for checking vendor renewal risk.".to_string(),
+            context: None,
+        };
+
+        let preview = generate_package_preview_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &template_options(),
+        )
+        .expect("preview created");
+        let preview_root = root
+            .join(".skill-notebook")
+            .join("create-previews")
+            .join(&preview.preview_id);
+        let package_root = filesystem::canonical_skills_root(&root).join(&preview.slug);
+        filesystem::write_text_file(&root.join(".42eval").join(&preview.slug), "block eval dir")
+            .expect("eval path blocker");
+
+        let error = commit_package_preview_in_workspace(
+            &root,
+            &CommitPackagePreviewRequest {
+                project_root_id: "project_root-test".to_string(),
+                preview_id: preview.preview_id.clone(),
+            },
+        )
+        .expect_err("commit should fail when eval workspace cannot be created");
+
+        assert!(error.contains("failed to create directory"));
+        assert!(!package_root.exists());
+        assert!(preview_root.exists());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn cleanup_removes_only_expired_preview_workspaces() {
+        let root = make_temp_project_root("preview-ttl");
+        let request = CreatePackageFromNlRequest {
+            project_root_id: "project_root-test".to_string(),
+            prompt: "Create a reusable skill for triaging procurement notes.".to_string(),
+            context: None,
+        };
+        let other_request = CreatePackageFromNlRequest {
+            project_root_id: "project_root-test".to_string(),
+            prompt: "Create a reusable skill for triaging launch notes.".to_string(),
+            context: None,
+        };
+
+        let stale_preview = generate_package_preview_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &template_options(),
+        )
+        .expect("stale preview created");
+        let fresh_preview = generate_package_preview_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &other_request,
+            &template_options(),
+        )
+        .expect("fresh preview created");
+        let stale_root = root
+            .join(".skill-notebook")
+            .join("create-previews")
+            .join(&stale_preview.preview_id);
+        let fresh_root = root
+            .join(".skill-notebook")
+            .join("create-previews")
+            .join(&fresh_preview.preview_id);
+
+        set_preview_created_at(&stale_root, "2026-04-26T00:00:00Z");
+        set_preview_created_at(&fresh_root, "2026-04-27T12:00:00Z");
+
+        let removed = cleanup_stale_package_previews_in_workspace_with_now(
+            &root,
+            TimeDuration::hours(24),
+            parse_iso("2026-04-28T00:00:00Z").expect("fixed now"),
+        )
+        .expect("cleanup previews");
+
+        assert_eq!(removed, 1);
+        assert!(!stale_root.exists());
+        assert!(fresh_root.exists());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn uses_mocked_claude_cli_when_available() {
-        let root = make_temp_workspace("claude");
+        let root = make_temp_project_root("claude");
         let mock_bin = root.join("mock-claude.sh");
         filesystem::write_text_file(
             &mock_bin,
@@ -1315,7 +2361,7 @@ mod tests {
         fs::set_permissions(&mock_bin, permissions).expect("chmod");
 
         let request = CreatePackageFromNlRequest {
-            workspace_id: "workspace-test".to_string(),
+            project_root_id: "project_root-test".to_string(),
             prompt: "Create a reusable skill for turning sprint planning notes into action items."
                 .to_string(),
             context: None,
@@ -1330,12 +2376,19 @@ mod tests {
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
         };
 
-        let response =
-            create_package_in_workspace_with_options(&root, "workspace-test", &request, &options)
-                .expect("claude package created");
-        let skill_md =
-            fs::read_to_string(root.join("packages").join(&response.slug).join("SKILL.md"))
-                .expect("skill md");
+        let response = create_package_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &options,
+        )
+        .expect("claude package created");
+        let skill_md = fs::read_to_string(
+            filesystem::canonical_skills_root(&root)
+                .join(&response.slug)
+                .join("SKILL.md"),
+        )
+        .expect("skill md");
 
         assert_eq!(response.generator_used, CREATOR_CLAUDE);
         assert!(response.generation_summary.contains("Claude CLI"));
@@ -1352,8 +2405,9 @@ mod tests {
 
     #[test]
     fn keeps_the_generated_title_when_slug_is_deduplicated() {
-        let root = make_temp_workspace("claude-title");
-        fs::create_dir_all(root.join("packages").join("meeting-mapper")).expect("existing package");
+        let root = make_temp_project_root("claude-title");
+        fs::create_dir_all(filesystem::canonical_skills_root(&root).join("meeting-mapper"))
+            .expect("existing package");
         let mock_bin = root.join("mock-claude.sh");
         filesystem::write_text_file(
             &mock_bin,
@@ -1365,7 +2419,7 @@ mod tests {
         fs::set_permissions(&mock_bin, permissions).expect("chmod");
 
         let request = CreatePackageFromNlRequest {
-            workspace_id: "workspace-test".to_string(),
+            project_root_id: "project_root-test".to_string(),
             prompt: "Create a reusable skill for turning sprint planning notes into action items."
                 .to_string(),
             context: None,
@@ -1379,9 +2433,13 @@ mod tests {
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
         };
 
-        let response =
-            create_package_in_workspace_with_options(&root, "workspace-test", &request, &options)
-                .expect("claude package created");
+        let response = create_package_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &options,
+        )
+        .expect("claude package created");
 
         assert_eq!(response.slug, "meeting-mapper-2");
         assert_eq!(response.name, "Meeting Mapper");
@@ -1391,7 +2449,7 @@ mod tests {
 
     #[test]
     fn auto_mode_falls_back_when_claude_cli_times_out() {
-        let root = make_temp_workspace("claude-timeout");
+        let root = make_temp_project_root("claude-timeout");
         let mock_bin = root.join("slow-claude.sh");
         filesystem::write_text_file(
             &mock_bin,
@@ -1403,7 +2461,7 @@ mod tests {
         fs::set_permissions(&mock_bin, permissions).expect("chmod");
 
         let request = CreatePackageFromNlRequest {
-            workspace_id: "workspace-test".to_string(),
+            project_root_id: "project_root-test".to_string(),
             prompt: "Create a reusable skill for handling long-running requests.".to_string(),
             context: None,
         };
@@ -1416,14 +2474,17 @@ mod tests {
             claude_timeout_secs: 1,
         };
 
-        let response =
-            create_package_in_workspace_with_options(&root, "workspace-test", &request, &options)
-                .expect("fallback package created");
+        let response = create_package_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &options,
+        )
+        .expect("fallback package created");
 
         assert_eq!(response.generator_used, CREATOR_FALLBACK);
         assert!(response.generation_summary.contains("timed out"));
-        assert!(root
-            .join("packages")
+        assert!(filesystem::canonical_skills_root(&root)
             .join(&response.slug)
             .join("SKILL.md")
             .exists());
@@ -1433,7 +2494,7 @@ mod tests {
 
     #[test]
     fn uses_mocked_skill_create_cli_when_available() {
-        let root = make_temp_workspace("skill-create");
+        let root = make_temp_project_root("skill-create");
         let mock_bin = root.join("mock-skill-create.sh");
         filesystem::write_text_file(
             &mock_bin,
@@ -1445,7 +2506,7 @@ mod tests {
         fs::set_permissions(&mock_bin, permissions).expect("chmod");
 
         let request = CreatePackageFromNlRequest {
-            workspace_id: "workspace-test".to_string(),
+            project_root_id: "project_root-test".to_string(),
             prompt: "Create a skill that reviews a PRD and produces a checklist.".to_string(),
             context: None,
         };
@@ -1459,14 +2520,17 @@ mod tests {
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
         };
 
-        let response =
-            create_package_in_workspace_with_options(&root, "workspace-test", &request, &options)
-                .expect("skill-create package created");
+        let response = create_package_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &options,
+        )
+        .expect("skill-create package created");
 
         assert_eq!(response.generator_used, CREATOR_SKILL_CREATE);
         assert!(response.generation_summary.contains("skill-create"));
-        assert!(root
-            .join("packages")
+        assert!(filesystem::canonical_skills_root(&root)
             .join(&response.slug)
             .join("SKILL.md")
             .exists());
@@ -1476,14 +2540,16 @@ mod tests {
 
     #[test]
     fn auto_mode_prefers_skill_create_when_available() {
-        let root = make_temp_workspace("auto-skill-create");
+        let root = make_temp_project_root("auto-skill-create");
         let mock_skill_create = root.join("mock-skill-create.sh");
         filesystem::write_text_file(
             &mock_skill_create,
             "#!/bin/sh\ncat <<'EOF'\n<draft_json>{\"name\":\"Auto Preferred\",\"slug\":\"auto-preferred\",\"description\":\"Prefers skill-create. Use when testing selection logic.\",\"skill_md\":\"# Auto Preferred\",\"system_prompt\":\"\",\"task_prompt\":\"\",\"example_markdown\":\"\",\"smoke_prompt\":\"\",\"expected_output\":\"\",\"expectations\":[],\"tags\":[\"auto\"]}</draft_json>\nEOF\n",
         )
         .expect("mock skill-create");
-        let mut permissions = fs::metadata(&mock_skill_create).expect("metadata").permissions();
+        let mut permissions = fs::metadata(&mock_skill_create)
+            .expect("metadata")
+            .permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&mock_skill_create, permissions).expect("chmod");
 
@@ -1498,7 +2564,7 @@ mod tests {
         fs::set_permissions(&mock_claude, permissions).expect("chmod");
 
         let request = CreatePackageFromNlRequest {
-            workspace_id: "workspace-test".to_string(),
+            project_root_id: "project_root-test".to_string(),
             prompt: "Create anything".to_string(),
             context: None,
         };
@@ -1512,9 +2578,13 @@ mod tests {
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
         };
 
-        let response =
-            create_package_in_workspace_with_options(&root, "workspace-test", &request, &options)
-                .expect("auto package created");
+        let response = create_package_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &options,
+        )
+        .expect("auto package created");
 
         assert_eq!(response.generator_used, CREATOR_SKILL_CREATE);
         fs::remove_dir_all(root).ok();
