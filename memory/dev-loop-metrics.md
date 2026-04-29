@@ -191,3 +191,14 @@
 | Frontend validation | green | `npm run lint`, `npm run build`, and `git diff --check` pass. |
 | Browser console errors | 0 | Non-Tauri browser preview produced expected fallback warnings for missing Tauri `invoke`; no console errors were reported. |
 | Dev server inspected | `http://127.0.0.1:1421/` | Server remains available for manual inspection after E2E. |
+
+### Tauri macOS Bundle Pass
+
+| Metric | Value | Notes |
+| --- | --- | --- |
+| Tauri package command | green | `npm run tauri:build` completed and produced both macOS app and DMG bundles. |
+| App bundle artifact | `src-tauri/target/release/bundle/macos/Skill Notebook.app` | Release app bundle is present and launches locally. |
+| DMG artifact | `src-tauri/target/release/bundle/dmg/Skill Notebook_0.1.0_aarch64.dmg` | DMG is present after bundle regeneration. |
+| Local signing state | valid ad-hoc | Added `bundle.macOS.signingIdentity: "-"`; `codesign --verify --deep --strict --verbose=2` passes. |
+| Distribution signing state | not notarized | `spctl` rejects the ad-hoc signed app, as expected without Developer ID notarization credentials. |
+| Post-package lint scope | fixed | ESLint now ignores `target` and `src-tauri/target` so generated Tauri assets do not break `npm run lint`. |

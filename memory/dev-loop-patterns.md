@@ -198,3 +198,14 @@
 - For Skill Notebook, spec alignment is not proven by browser interactions alone because PRD/Tech Spec require desktop/web surfaces to stay thin over shared core commands.
 - Run one E2E rail against the Rust CLI/core loop (`find -> create -> eval -> version save/diff/restore`) and another against the browser workbench loop, using a temporary project root for destructive version restore checks.
 - Keep browser fallback warnings separate from product failures: in non-Tauri preview they are expected only when `invoke` falls back to demo data, while console errors should remain zero.
+
+### Tauri macOS Local Bundles Need Explicit Ad-Hoc Signing
+
+- A successful `tauri build` can still produce a macOS `.app` whose strict `codesign --verify --deep --strict` check fails if the app bundle is only linker-signed.
+- For local development bundles without Developer ID credentials, set `bundle.macOS.signingIdentity` to `"-"` so Tauri signs nested binaries and seals bundle resources.
+- Treat this as local packaging only: `codesign` can pass while `spctl` still rejects the app because ad-hoc signed builds are not notarized for external distribution.
+
+### Build Artifacts Must Stay Out Of JS Lint Scopes
+
+- After `tauri build`, generated JavaScript assets can appear under `src-tauri/target/...` and break ESLint parsing even though they are build outputs.
+- Keep frontend lint ignores aligned with Git ignores for `dist`, root `target`, and `src-tauri/target` so post-package validation stays repeatable.
