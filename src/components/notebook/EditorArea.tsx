@@ -67,7 +67,8 @@ export function EditorArea({ packageId }: EditorAreaProps) {
 
   async function finishEditing() {
     if (isDirty) {
-      await saveFile(packageId);
+      const saved = await saveFile(packageId);
+      if (!saved) return;
     }
     setMode("preview");
   }

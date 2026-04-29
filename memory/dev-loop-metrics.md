@@ -171,3 +171,12 @@
 | Preview lifecycle gap | 0 | Active discard, commit cleanup, and passive TTL cleanup are all implemented. |
 | Test execution depth gap | 1 | Shell/script-backed execution is still future work behind an explicit safety boundary. |
 | Infrastructure gaps | 1+ | Filesystem watch refresh remains open; native export/zip is still a product gap. |
+
+### Prototype Parity Regression Repair
+
+| Metric | Value | Notes |
+| --- | --- | --- |
+| Hidden version workflow regressions repaired | 4/4 | Eval, test, save version, diff, and restore are available from the top-bar version panel; save remains gated by eval presence. |
+| Direct prompt save shortcuts removed | 2 | Removed prompt-based save from top bar and command palette in favor of the guarded VersionPanel flow. |
+| Editor save-and-exit behavior | fixed | `完成` now stays in edit mode when persistence fails. |
+| Parity repair validation | green | `npm run lint`, `npm run build`, `git diff --check`, and browser interaction checks for version panel + diff modal pass. |

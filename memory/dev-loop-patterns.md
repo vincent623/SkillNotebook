@@ -175,3 +175,20 @@
 
 - If V1 uses filesystem-backed notebooks as the real persistence path, remove empty SQLite/repository placeholder files instead of leaving them as architectural noise.
 - Public commands should either do real work or disappear from the V1 surface; `not_implemented` responses are useful only during short scaffolding windows.
+
+## 2026-04-29
+
+### Visual Parity Must Preserve Feature Parity
+
+- When refactoring a production UI to match a prototype, track old workflow entry points as explicit parity requirements, not incidental layout details.
+- If a visible panel is removed for prototype fidelity, its actions need an equal or better home before shipping the refactor; for Skill Notebook, version diff, restore, eval, test, and save belong behind the top-bar version affordance.
+
+### Quality Gates Need A Single Owning Surface
+
+- Do not replace a guarded workflow with a direct prompt just because the prototype has a compact toolbar.
+- Saving formal versions should remain attached to eval evidence, required notes, diff/restore context, and explicit confirmation even when the visible workbench is simplified.
+
+### Save-And-Exit Requires Save Success
+
+- Editor "Done" actions should only leave edit mode after persistence succeeds.
+- On save failure, keep the user in the editing surface and show the error instead of switching to preview with unsaved content.

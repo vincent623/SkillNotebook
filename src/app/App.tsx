@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CommandPalette } from "../components/command/CommandPalette";
 import { ExportUseModal } from "../components/export/ExportUseModal";
+import { VersionPanel } from "../components/notebook/VersionPanel";
 import { WorkbenchView } from "./views/WorkbenchView";
 import { CreateView } from "./views/CreateView";
 import { SettingsPage } from "./routes/SettingsPage";
@@ -92,10 +93,12 @@ export default function App() {
   const currentScreen = useUiStore((state) => state.currentScreen);
   const setCurrentScreen = useUiStore((state) => state.setCurrentScreen);
   const openCommandPalette = useUiStore((state) => state.openCommandPalette);
+  const isVersionPanelOpen = useUiStore((state) => state.isVersionPanelOpen);
+  const openVersionPanel = useUiStore((state) => state.openVersionPanel);
+  const closeVersionPanel = useUiStore((state) => state.closeVersionPanel);
   const bootstrap = useProjectStore((state) => state.bootstrap);
   const selectedPackageId = useProjectStore((state) => state.selectedPackageId);
   const loadBootstrap = useProjectStore((state) => state.loadBootstrap);
-  const saveVersion = useProjectStore((state) => state.saveVersion);
 
   useEffect(() => {
     void loadBootstrap();
@@ -111,11 +114,14 @@ export default function App() {
         event.preventDefault();
         setCurrentScreen("create");
       }
+      if (event.key === "Escape") {
+        closeVersionPanel();
+      }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [openCommandPalette, setCurrentScreen]);
+  }, [closeVersionPanel, openCommandPalette, setCurrentScreen]);
 
   const selectedPackage = useMemo(
     () => bootstrap?.packages.find((item) => item.id === selectedPackageId) ?? bootstrap?.packages[0] ?? null,
@@ -125,14 +131,14 @@ export default function App() {
     () => bootstrap?.evalReports.find((report) => report.packageId === selectedPackage?.id),
     [bootstrap?.evalReports, selectedPackage?.id],
   );
+  const selectedVersions = useMemo(
+    () =>
+      (bootstrap?.versions ?? [])
+        .filter((version) => version.packageId === selectedPackage?.id)
+        .sort((a, b) => b.versionNumber - a.versionNumber),
+    [bootstrap?.versions, selectedPackage?.id],
+  );
   const quality = selectedQuality(selectedPackage, selectedEvalReport);
-
-  function handleSaveVersion() {
-    if (!selectedPackage) return;
-    const note = window.prompt(`保存 ${selectedPackage.slug} 的新版本`, "更新");
-    if (note === null) return;
-    void saveVersion(selectedPackage.id, note.trim() || "更新");
-  }
 
   return (
     <div className="app-shell">
@@ -181,8 +187,8 @@ export default function App() {
           <button
             className="topbar-icon-button"
             disabled={!selectedPackage}
-            onClick={handleSaveVersion}
-            title="提交新版本"
+            onClick={openVersionPanel}
+            title="版本与质量门禁"
             type="button"
           >
             <GitIcon />
@@ -214,6 +220,33 @@ export default function App() {
           pkg={selectedPackage}
           projectRoot={bootstrap.projectRoot}
         />
+      ) : null}
+      {isVersionPanelOpen && selectedPackage ? (
+        <div className="version-drawer-overlay" onClick={closeVersionPanel} role="presentation">
+          <section
+            aria-label="版本与质量门禁"
+            className="version-drawer"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="version-drawer-header">
+              <div>
+                <span className="version-drawer-eyebrow">Versions</span>
+                <h2>版本与质量门禁</h2>
+                <p>{selectedPackage.slug} · v{selectedPackage.currentVersion}</p>
+              </div>
+              <button className="button-secondary version-drawer-close" onClick={closeVersionPanel} type="button">
+                关闭
+              </button>
+            </header>
+            <div className="version-drawer-body">
+              <VersionPanel
+                evalReport={selectedEvalReport}
+                pkg={selectedPackage}
+                versions={selectedVersions}
+              />
+            </div>
+          </section>
+        </div>
       ) : null}
     </div>
   );

@@ -23,12 +23,12 @@ export function CommandPalette() {
   const isOpen = useUiStore((state) => state.isCommandPaletteOpen);
   const close = useUiStore((state) => state.closeCommandPalette);
   const setCurrentScreen = useUiStore((state) => state.setCurrentScreen);
+  const openVersionPanel = useUiStore((state) => state.openVersionPanel);
   const bootstrap = useProjectStore((state) => state.bootstrap);
   const selectedPackageId = useProjectStore((state) => state.selectedPackageId);
   const selectPackage = useProjectStore((state) => state.selectPackage);
   const runEval = useProjectStore((state) => state.runEval);
   const runTest = useProjectStore((state) => state.runTest);
-  const saveVersion = useProjectStore((state) => state.saveVersion);
 
   const selectedPackage = bootstrap?.packages.find((item) => item.id === selectedPackageId) ?? null;
   const handleClose = useCallback(() => {
@@ -119,23 +119,20 @@ export function CommandPalette() {
           },
         },
         {
-          id: "save-version",
-          title: "保存当前 Skill 版本",
-          subtitle: `${selectedPackage.slug} · v${selectedPackage.currentVersion + 1}`,
-          keywords: "version save commit snapshot",
+          id: "open-version-panel",
+          title: "打开版本与质量门禁",
+          subtitle: `${selectedPackage.slug} · v${selectedPackage.currentVersion}`,
+          keywords: "version save commit snapshot restore diff quality gate",
           run: () => {
-            const note = window.prompt(`保存 ${selectedPackage.slug} 的新版本`, "更新");
-            if (note !== null) {
-              void saveVersion(selectedPackage.id, note.trim() || "更新");
-            }
             handleClose();
+            openVersionPanel();
           },
         },
       );
     }
 
     return items;
-  }, [bootstrap, handleClose, runEval, runTest, saveVersion, selectPackage, selectedPackage, setCurrentScreen]);
+  }, [bootstrap, handleClose, openVersionPanel, runEval, runTest, selectPackage, selectedPackage, setCurrentScreen]);
 
   const visibleCommands = commands.filter((command) => commandMatches(command, query)).slice(0, 12);
 
