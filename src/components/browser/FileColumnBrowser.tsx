@@ -152,7 +152,7 @@ export function FileColumnBrowser({
         {columns.map((column, columnIndex) => (
           <section className="file-column" key={column.path ?? "root"}>
             <header className="file-column-header">
-              <span>{columnIndex === 0 ? "root" : "folder"}</span>
+              <span>{columnIndex === 0 ? "目录" : "文件"}</span>
               <strong title={column.path ?? packageSlug}>{column.label}</strong>
             </header>
             <div className="file-column-rows">
@@ -178,7 +178,7 @@ export function FileColumnBrowser({
                       type="button"
                     >
                       <span className="file-row-icon">{entry.isDirectory ? <FolderIcon /> : <FileIcon />}</span>
-                      <span className="file-row-name">{entry.name}{entry.isDirectory ? "/" : ""}</span>
+                      <span className="file-row-name">{entry.name}</span>
                       {entry.isDirectory ? <span className="file-row-chevron">›</span> : null}
                     </button>
                   );

@@ -27,6 +27,8 @@ export function CommandPalette() {
   const selectedPackageId = useProjectStore((state) => state.selectedPackageId);
   const selectPackage = useProjectStore((state) => state.selectPackage);
   const runEval = useProjectStore((state) => state.runEval);
+  const runTest = useProjectStore((state) => state.runTest);
+  const saveVersion = useProjectStore((state) => state.saveVersion);
 
   const selectedPackage = bootstrap?.packages.find((item) => item.id === selectedPackageId) ?? null;
   const handleClose = useCallback(() => {
@@ -106,11 +108,34 @@ export function CommandPalette() {
             handleClose();
           },
         },
+        {
+          id: "run-test",
+          title: "运行当前 Skill 测试",
+          subtitle: selectedPackage.name,
+          keywords: "test smoke check",
+          run: () => {
+            void runTest(selectedPackage.id);
+            handleClose();
+          },
+        },
+        {
+          id: "save-version",
+          title: "保存当前 Skill 版本",
+          subtitle: `${selectedPackage.slug} · v${selectedPackage.currentVersion + 1}`,
+          keywords: "version save commit snapshot",
+          run: () => {
+            const note = window.prompt(`保存 ${selectedPackage.slug} 的新版本`, "更新");
+            if (note !== null) {
+              void saveVersion(selectedPackage.id, note.trim() || "更新");
+            }
+            handleClose();
+          },
+        },
       );
     }
 
     return items;
-  }, [bootstrap, handleClose, runEval, selectPackage, selectedPackage, setCurrentScreen]);
+  }, [bootstrap, handleClose, runEval, runTest, saveVersion, selectPackage, selectedPackage, setCurrentScreen]);
 
   const visibleCommands = commands.filter((command) => commandMatches(command, query)).slice(0, 12);
 

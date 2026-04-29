@@ -1,16 +1,59 @@
-import { useEffect, useState } from "react";
-import { ExportUseModal } from "../../components/export/ExportUseModal";
+import { useEffect } from "react";
 import { SkillLibraryColumn } from "../../components/library/SkillLibraryColumn";
 import { FileColumnBrowser } from "../../components/browser/FileColumnBrowser";
-import { VersionPanel } from "../../components/notebook/VersionPanel";
 import { EditorArea } from "../../components/notebook/EditorArea";
-import { PackageSummary } from "../../components/notebook/PackageSummary";
 import { useEditorStore } from "../../stores/editor-store";
 import { useProjectStore } from "../../stores/project-store";
 import { useUiStore } from "../../stores/ui-store";
+import type { EvalReport } from "../../types/models";
+
+function ArchiveIcon() {
+  return (
+    <svg width="32" height="32" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="12" height="3" rx=".5" />
+      <path d="M3 6v7a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6M6 9h4" />
+    </svg>
+  );
+}
+
+function ValidationPanel({ evalReport }: { evalReport?: EvalReport }) {
+  if (!evalReport) return null;
+
+  if (evalReport.overallStatus === "usable" && evalReport.suggestions.length === 0) {
+    return (
+      <div className="prototype-validation-panel prototype-validation-ok">
+        <span>✓</span>
+        全部校验通过
+      </div>
+    );
+  }
+
+  return (
+    <div className="prototype-validation-panel">
+      <div className="prototype-validation-title">校验结果</div>
+      {(evalReport.suggestions.length > 0 ? evalReport.suggestions : ["建议运行评估并检查 skill 结构。"])
+        .slice(0, 3)
+        .map((suggestion) => (
+          <div className="prototype-validation-row" key={suggestion}>
+            <span>△</span>
+            {suggestion}
+          </div>
+        ))}
+    </div>
+  );
+}
+
+function EmptyContentPane({ evalReport }: { evalReport?: EvalReport }) {
+  return (
+    <div className="workbench-empty-pane is-large">
+      <ArchiveIcon />
+      <span>从左侧选择一个文件</span>
+      <ValidationPanel evalReport={evalReport} />
+    </div>
+  );
+}
 
 export function WorkbenchView() {
-  const [exportOpen, setExportOpen] = useState(false);
   const bootstrap = useProjectStore((state) => state.bootstrap);
   const status = useProjectStore((state) => state.status);
   const selectedPackageId = useProjectStore((state) => state.selectedPackageId);
@@ -28,9 +71,6 @@ export function WorkbenchView() {
 
   const pkg = bootstrap?.packages.find((item) => item.id === selectedPackageId) ?? null;
   const evalReport = bootstrap?.evalReports.find((report) => report.packageId === selectedPackageId);
-  const versions = (bootstrap?.versions ?? [])
-    .filter((version) => version.packageId === selectedPackageId)
-    .sort((a, b) => b.versionNumber - a.versionNumber);
 
   useEffect(() => {
     if (!selectedPackageId) return;
@@ -61,36 +101,14 @@ export function WorkbenchView() {
 
       <aside className="workbench-browser-column" aria-label="Package Browser">
         {pkg ? (
-          <>
-            <div className="browser-package-header">
-              <span className="browser-package-eyebrow">.skills/{pkg.slug}</span>
-              <h2>{pkg.name}</h2>
-              <p>{pkg.description}</p>
-              <div className="browser-package-actions">
-                <button
-                  className="button-secondary browser-use-btn"
-                  onClick={() => setExportOpen(true)}
-                  type="button"
-                >
-                  使用 / 导出
-                </button>
-              </div>
-            </div>
-            <div className="browser-section">
-              <div className="browser-section-label">文件</div>
-              <FileColumnBrowser
-                entries={fileTree}
-                currentFilePath={currentFilePath}
-                errorMessage={treeError}
-                isLoading={isTreeLoading}
-                packageSlug={pkg.slug}
-                onSelectFile={(path) => { void openFile(pkg.id, path); }}
-              />
-            </div>
-            <div className="browser-version-panel">
-              <VersionPanel pkg={pkg} evalReport={evalReport} versions={versions} />
-            </div>
-          </>
+          <FileColumnBrowser
+            entries={fileTree}
+            currentFilePath={currentFilePath}
+            errorMessage={treeError}
+            isLoading={isTreeLoading}
+            packageSlug={pkg.slug}
+            onSelectFile={(path) => { void openFile(pkg.id, path); }}
+          />
         ) : (
           <div className="workbench-empty-pane">
             <strong>选择一个 Skill</strong>
@@ -104,7 +122,7 @@ export function WorkbenchView() {
           currentFilePath || fileError ? (
             <EditorArea packageId={pkg.id} />
           ) : (
-            <PackageSummary pkg={pkg} evalReport={evalReport} />
+            <EmptyContentPane evalReport={evalReport} />
           )
         ) : (
           <div className="workbench-empty-pane is-large">
@@ -113,13 +131,6 @@ export function WorkbenchView() {
           </div>
         )}
       </main>
-      {exportOpen && pkg ? (
-        <ExportUseModal
-          onClose={() => setExportOpen(false)}
-          pkg={pkg}
-          projectRoot={bootstrap.projectRoot}
-        />
-      ) : null}
     </section>
   );
 }

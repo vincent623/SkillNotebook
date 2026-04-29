@@ -7,6 +7,23 @@ interface EditorAreaProps {
   packageId: string;
 }
 
+function CopyIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="5" y="2" width="8" height="10" rx="1" />
+      <path d="M3 5v8a1 1 0 0 0 1 1h7" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 2 14 5l-8 8H3v-3Z" />
+    </svg>
+  );
+}
+
 function isMarkdownFile(path: string | null) {
   if (!path) return false;
   const lowerPath = path.toLowerCase();
@@ -48,6 +65,13 @@ export function EditorArea({ packageId }: EditorAreaProps) {
     window.setTimeout(() => setCopied(false), 1600);
   }
 
+  async function finishEditing() {
+    if (isDirty) {
+      await saveFile(packageId);
+    }
+    setMode("preview");
+  }
+
   if (!currentFilePath && !fileError) {
     return null;
   }
@@ -61,6 +85,26 @@ export function EditorArea({ packageId }: EditorAreaProps) {
           <span className={`editor-file-state ${fileStateClass}`}>{fileStateLabel}</span>
         </div>
         <div className="editor-mode-toggle">
+          {mode === "edit" ? (
+            <button
+              className="editor-done-btn"
+              disabled={isSaving}
+              onClick={() => { void finishEditing(); }}
+              type="button"
+            >
+              {isSaving ? "保存中..." : "完成"}
+            </button>
+          ) : (
+            <button
+              className="editor-mode-btn"
+              onClick={() => setMode("edit")}
+              type="button"
+              disabled={!currentFilePath}
+            >
+              <EditIcon />
+              编辑
+            </button>
+          )}
           <button
             className="editor-copy-btn"
             disabled={!currentFilePath}
@@ -68,33 +112,7 @@ export function EditorArea({ packageId }: EditorAreaProps) {
             title="复制当前文件内容"
             type="button"
           >
-            {copied ? "已复制" : "复制"}
-          </button>
-          {isDirty && mode === "edit" ? (
-            <button
-              className="button-primary editor-save-btn"
-              disabled={isSaving}
-              onClick={() => { void saveFile(packageId); }}
-              type="button"
-            >
-              {isSaving ? "保存中..." : "保存"}
-            </button>
-          ) : null}
-          <button
-            className={`editor-mode-btn ${mode === "preview" ? "is-active" : ""}`}
-            onClick={() => setMode("preview")}
-            type="button"
-            disabled={!currentFilePath}
-          >
-            预览
-          </button>
-          <button
-            className={`editor-mode-btn ${mode === "edit" ? "is-active" : ""}`}
-            onClick={() => setMode("edit")}
-            type="button"
-            disabled={!currentFilePath}
-          >
-            编辑
+            {copied ? "✓" : <CopyIcon />}
           </button>
         </div>
       </div>
