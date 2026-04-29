@@ -192,3 +192,9 @@
 
 - Editor "Done" actions should only leave edit mode after persistence succeeds.
 - On save failure, keep the user in the editing surface and show the error instead of switching to preview with unsaved content.
+
+### Original-Spec E2E Needs Two Rails
+
+- For Skill Notebook, spec alignment is not proven by browser interactions alone because PRD/Tech Spec require desktop/web surfaces to stay thin over shared core commands.
+- Run one E2E rail against the Rust CLI/core loop (`find -> create -> eval -> version save/diff/restore`) and another against the browser workbench loop, using a temporary project root for destructive version restore checks.
+- Keep browser fallback warnings separate from product failures: in non-Tauri preview they are expected only when `invoke` falls back to demo data, while console errors should remain zero.

@@ -180,3 +180,14 @@
 | Direct prompt save shortcuts removed | 2 | Removed prompt-based save from top bar and command palette in favor of the guarded VersionPanel flow. |
 | Editor save-and-exit behavior | fixed | `完成` now stays in edit mode when persistence fails. |
 | Parity repair validation | green | `npm run lint`, `npm run build`, `git diff --check`, and browser interaction checks for version panel + diff modal pass. |
+
+### Original Spec E2E Pass
+
+| Metric | Value | Notes |
+| --- | --- | --- |
+| Core CLI E2E rail | green | Temporary project root completed `find`, filtered search, `eval`, `version list`, eval-backed `version save`, draft mutation `version diff`, `version restore`, and template-mode `create`. |
+| Browser workbench E2E rail | green | Covered three-pane workbench, search/filter, `SKILL.md` open/edit/save, eval/test, diff modal, restore confirmation, note-gated version save modal, export/use modal, command palette, create preview commit, and disabled URL mode. |
+| Rust validation | green | `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` and `cargo test --manifest-path src-tauri/Cargo.toml` pass with 33 tests. |
+| Frontend validation | green | `npm run lint`, `npm run build`, and `git diff --check` pass. |
+| Browser console errors | 0 | Non-Tauri browser preview produced expected fallback warnings for missing Tauri `invoke`; no console errors were reported. |
+| Dev server inspected | `http://127.0.0.1:1421/` | Server remains available for manual inspection after E2E. |
