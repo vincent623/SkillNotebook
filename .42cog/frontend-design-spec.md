@@ -265,7 +265,7 @@ Open create
 | --- | --- | --- |
 | Text description | Required | Backed by `package_generate_preview_from_nl` and `package_commit_preview`. |
 | Local files/directories | Supported | Backed by `package_generate_preview_from_sources`; uses local path inventory and UTF-8 text excerpts, records binary files as metadata only, then attaches `references/source-inventory.md`. |
-| URL | Planned | Must not appear functional until backend/network handling is implemented. |
+| URL | Supported | Backed by `package_generate_preview_from_url`; fetches bounded `http(s)` source text and attaches `references/url-source.md`. |
 
 ### 6.3 Current Backend Contract
 
@@ -275,6 +275,7 @@ Implemented V1 commands:
 
 - `package_generate_preview_from_nl`: writes generated files under `.skill-notebook/create-previews/<preview-id>/package/` and returns file contents plus file tree.
 - `package_generate_preview_from_sources`: reads local file/directory paths, builds a bounded source inventory, generates a preview, and attaches `references/source-inventory.md`.
+- `package_generate_preview_from_url`: fetches bounded `http(s)` source text, generates a preview, and attaches `references/url-source.md`.
 - `package_commit_preview`: copies the preview package into `.skills/<slug>/`, writes notebook metadata, runs eval, removes the preview workspace, and opens the new package after bootstrap refresh.
 - `package_discard_preview`: removes an abandoned preview workspace when the create view is cleared, replaced, or unmounted.
 - `package_create_from_nl`: remains available as a direct-create compatibility path, but the frontend create surface should prefer preview-before-save.
@@ -291,11 +292,10 @@ The design baseline includes an export/use modal. Production V1 should support a
 - Copy absolute `SKILL.md` path.
 - Copy command to symlink package into `~/.claude/skills/<slug>`.
 - Copy command to symlink package into `<project>/.claude/skills/<slug>`.
+- Export a sanitized package zip through the native `package_export_zip` command.
 
 Later:
 
-- Export package as zip.
-- Export sanitized/shareable package.
 - Generate reconstruction shell script.
 
 All commands shown to the user must be derived from real local paths, not mock paths.
@@ -449,29 +449,31 @@ Existing commands to use:
 | --- | --- |
 | Bootstrap app data | `app_bootstrap` |
 | Open project root | `project_root_open` |
+| Create project root | `project_root_create` |
 | List recent project roots | `project_root_list_recent` |
 | Create package from text | `package_create_from_nl` |
 | Generate package preview | `package_generate_preview_from_nl` |
 | Generate package preview from local paths | `package_generate_preview_from_sources` |
+| Generate package preview from URL | `package_generate_preview_from_url` |
 | Commit package preview | `package_commit_preview` |
 | Discard package preview | `package_discard_preview` |
 | Package file tree | `package_file_tree` |
 | Read package file | `package_file_read` |
 | Write package file | `package_file_write` |
+| Update package metadata | `package_update` |
 | Search package | `package_search` |
 | Run eval | `package_run_eval` |
 | Run package smoke tests | `package_run_test` |
 | Save version | `package_save_version` |
 | Diff version | `package_diff_version` |
 | Restore version | `package_restore_version` |
+| Export sanitized zip | `package_export_zip` |
 | Settings | `settings_get` |
 
-Known gaps:
+Current implementation state:
 
-- URL-based package generation.
-- Native export/zip.
-- Shell/script-backed package test execution.
-- Filesystem watch refresh.
+- No known V1 implementation gaps remain against this frontend contract.
+- URL-based package generation, native sanitized zip export, shell/script-backed package test execution, and clean-editor filesystem refresh are implemented.
 
 ## 13. Migration Plan
 
@@ -498,8 +500,7 @@ Known gaps:
 ### Phase 4: Create Flow
 
 - Replace simple create page with preview-before-save flow.
-- Support text and local file/directory modes against backend preview commands.
-- Disable URL mode until backend/network handling exists.
+- Support text, local file/directory, and URL modes against backend preview commands.
 - Add generation progress and post-create summary.
 
 ### Phase 5: Eval, Version, Export
@@ -519,8 +520,8 @@ Before considering frontend alignment complete:
 - User can run eval and understand scores/suggestions.
 - User can save a formal version only after eval.
 - User can view diff and restore a version with confirmation.
-- User can generate a skill from text and land in the created package.
-- User can copy local usage paths or symlink commands.
+- User can generate a skill from text, local sources, or URL and land in the created package.
+- User can copy local usage paths, symlink commands, or export a sanitized zip.
 - No UI exposes mock-only capabilities as real.
 - `npm run build` passes.
 

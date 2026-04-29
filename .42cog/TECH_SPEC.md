@@ -114,6 +114,7 @@ src-tauri/src/
   - `skill find`
   - `skill create`
   - `skill eval`
+  - `skill test`
   - `skill version`
 - `app_bootstrap`
 - `project_root_open`
@@ -122,17 +123,23 @@ src-tauri/src/
 - `package_list`
 - `package_get`
 - `package_create_from_nl`
+- `package_generate_preview_from_nl`
+- `package_generate_preview_from_sources`
+- `package_generate_preview_from_url`
+- `package_commit_preview`
+- `package_discard_preview`
 - `package_file_tree`
 - `package_file_read`
 - `package_file_write`
 - `package_update`
 - `package_search`
 - `package_run_eval`
+- `package_run_test`
 - `package_list_versions`
 - `package_save_version`
 - `package_diff_version`
 - `package_restore_version`
-- `package_run_test`
+- `package_export_zip`
 - `settings_get`
 - `settings_update`
 
