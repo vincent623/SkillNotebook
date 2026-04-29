@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getSettings, openProjectRoot } from "../../services/tauri-api";
+import { createProjectRoot, getSettings, openProjectRoot } from "../../services/tauri-api";
 import { BackButton } from "../../components/common/BackButton";
 import { useProjectStore } from "../../stores/project-store";
 import type { AppSettings } from "../../types/models";
@@ -12,6 +12,8 @@ export function SettingsPage() {
   const [projectRootError, setWorkspaceError] = useState<string | null>(null);
   const [projectRootSuccess, setWorkspaceSuccess] = useState<string | null>(null);
   const [isSwitching, setIsSwitching] = useState(false);
+  const [newProjectRootName, setNewProjectRootName] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -28,6 +30,45 @@ export function SettingsPage() {
     void load();
     return () => { cancelled = true; };
   }, [bootstrap?.projectRoot.rootPath]);
+
+  async function switchProjectRoot(path: string) {
+    setIsSwitching(true);
+    setWorkspaceError(null);
+    setWorkspaceSuccess(null);
+    try {
+      const projectRoot = await openProjectRoot(path.trim());
+      await loadBootstrap();
+      const next = await getSettings();
+      setSettings(next);
+      setWorkspacePath(projectRoot.rootPath);
+      setWorkspaceSuccess(`已切换到 ${projectRoot.rootPath}`);
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : "切换失败");
+    } finally {
+      setIsSwitching(false);
+    }
+  }
+
+  async function createAndOpenProjectRoot() {
+    const name = newProjectRootName.trim();
+    if (!name) return;
+    setIsCreating(true);
+    setWorkspaceError(null);
+    setWorkspaceSuccess(null);
+    try {
+      const projectRoot = await createProjectRoot(name);
+      await loadBootstrap();
+      const next = await getSettings();
+      setSettings(next);
+      setWorkspacePath(projectRoot.rootPath);
+      setNewProjectRootName("");
+      setWorkspaceSuccess(`已创建并打开 ${projectRoot.rootPath}`);
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : "创建失败");
+    } finally {
+      setIsCreating(false);
+    }
+  }
 
   return (
     <section className="settings-view">
@@ -51,23 +92,7 @@ export function SettingsPage() {
             <button
               className="button-primary"
               disabled={isSwitching || !projectRootPath.trim()}
-              onClick={async () => {
-                setIsSwitching(true);
-                setWorkspaceError(null);
-                setWorkspaceSuccess(null);
-                try {
-                  const projectRoot = await openProjectRoot(projectRootPath.trim());
-                  await loadBootstrap();
-                  const next = await getSettings();
-                  setSettings(next);
-                  setWorkspacePath(projectRoot.rootPath);
-                  setWorkspaceSuccess(`已切换到 ${projectRoot.rootPath}`);
-                } catch (error) {
-                  setWorkspaceError(error instanceof Error ? error.message : "切换失败");
-                } finally {
-                  setIsSwitching(false);
-                }
-              }}
+              onClick={() => { void switchProjectRoot(projectRootPath); }}
               type="button"
             >
               {isSwitching ? "切换中..." : "打开项目"}
@@ -81,12 +106,80 @@ export function SettingsPage() {
               <ul className="detail-suggestions" style={{ marginTop: 4 }}>
                 {settings.recentProjectRoots.map((item) => (
                   <li key={item.rootPath}>
-                    <strong>{item.name}</strong> <span className="mono-text">{item.rootPath}</span>
+                    <button
+                      className="settings-recent-root"
+                      disabled={isSwitching || item.rootPath === settings.currentProjectRoot}
+                      onClick={() => { void switchProjectRoot(item.rootPath); }}
+                      type="button"
+                    >
+                      <strong>{item.name}</strong>
+                      <span className="mono-text">{item.rootPath}</span>
+                    </button>
                   </li>
                 ))}
               </ul>
             </div>
           ) : null}
+        </div>
+
+        <div className="content-card">
+          <h3>创建项目根目录</h3>
+          <label className="field-stack" style={{ marginTop: 12 }}>
+            <span className="field-label">名称</span>
+            <input
+              className="detail-save-input"
+              onChange={(e) => setNewProjectRootName(e.target.value)}
+              placeholder="例如 Research Skills"
+              value={newProjectRootName}
+            />
+          </label>
+          <p className="muted" style={{ marginTop: 8 }}>
+            会在默认 project-root 同级目录创建新目录，并初始化 <span className="mono-text">.skills/</span> 与 <span className="mono-text">.skill-notebook/</span>。
+          </p>
+          <div style={{ marginTop: 8 }}>
+            <button
+              className="button-secondary"
+              disabled={isCreating || !newProjectRootName.trim()}
+              onClick={() => { void createAndOpenProjectRoot(); }}
+              type="button"
+            >
+              {isCreating ? "创建中..." : "创建并打开"}
+            </button>
+          </div>
+        </div>
+
+        <div className="content-card">
+          <h3>创建桥接</h3>
+          {settings ? (
+            <dl className="settings-bridge-grid" style={{ marginTop: 12 }}>
+              <div>
+                <dt>模式</dt>
+                <dd>{settings.creationBridge.mode}</dd>
+              </div>
+              <div>
+                <dt>优先生成器</dt>
+                <dd>{settings.creationBridge.preferredGenerator}</dd>
+              </div>
+              <div>
+                <dt>skill-create</dt>
+                <dd>{settings.creationBridge.skillCreateCommandAvailable ? "可用" : "不可用"}</dd>
+              </div>
+              <div>
+                <dt>Claude CLI</dt>
+                <dd>{settings.creationBridge.claudeCliAvailable ? "可用" : "不可用"}</dd>
+              </div>
+              <div>
+                <dt>技能目录</dt>
+                <dd>{settings.skillRootName ?? ".skills"}</dd>
+              </div>
+              <div>
+                <dt>正式版本上限</dt>
+                <dd>{settings.formalVersionCap}</dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="muted" style={{ marginTop: 8 }}>正在读取创建桥接状态...</p>
+          )}
         </div>
 
         <div className="content-card">

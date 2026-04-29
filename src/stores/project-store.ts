@@ -46,6 +46,7 @@ interface ProjectStore {
   lastVersionRestoredVersionNumber: number | null;
   lastVersionRestoredAt: string | null;
   loadBootstrap: () => Promise<void>;
+  refreshBootstrap: (preferredPackageId?: string | null) => Promise<void>;
   selectPackage: (packageId: string) => void;
   toggleCreateComposer: (nextOpen?: boolean) => void;
   setCreatePrompt: (value: string) => void;
@@ -115,6 +116,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       set({
         status: "error",
         errorMessage: error instanceof Error ? error.message : "Unknown bootstrap error",
+      });
+    }
+  },
+  refreshBootstrap: async (preferredPackageId) => {
+    try {
+      set(await refreshBootstrap(preferredPackageId ?? get().selectedPackageId));
+    } catch (error) {
+      set({
+        status: "error",
+        errorMessage: error instanceof Error ? error.message : "Unknown refresh error",
       });
     }
   },

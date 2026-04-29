@@ -6,7 +6,8 @@ use serde_json::{json, Value};
 
 use crate::domain::package::{CreatePackageFromNlRequest, PackageStatus};
 use crate::services::{
-    eval_service, package_service, search_service, skill_create_service, version_service,
+    eval_service, package_service, search_service, skill_create_service, test_service,
+    version_service,
 };
 use crate::storage::filesystem;
 
@@ -27,6 +28,9 @@ enum SkillCommand {
         context: Option<String>,
     },
     Eval {
+        package_id: String,
+    },
+    Test {
         package_id: String,
     },
     Version(VersionCommand),
@@ -191,6 +195,16 @@ where
             }
             SkillCommand::Eval { package_id }
         }
+        "test" => {
+            let package_id = argv
+                .get(index + 1)
+                .cloned()
+                .ok_or_else(|| "test requires a package id".to_string())?;
+            if argv.len() > index + 2 {
+                return Err("test accepts exactly one package id".to_string());
+            }
+            SkillCommand::Test { package_id }
+        }
         "version" => {
             let action = argv.get(index + 1).map(String::as_str).ok_or_else(|| {
                 "version requires a subcommand: list | save | diff | restore".to_string()
@@ -276,6 +290,7 @@ Usage:
   {program} [--project_root PATH] [--json] find [query]
   {program} [--project_root PATH] [--json] create <prompt> [--context <text>]
   {program} [--project_root PATH] [--json] eval <package-id>
+  {program} [--project_root PATH] [--json] test <package-id>
   {program} [--project_root PATH] [--json] version list <package-id>
   {program} [--project_root PATH] [--json] version save <package-id> [--note <text>]
   {program} [--project_root PATH] [--json] version diff <version-id>
@@ -408,6 +423,26 @@ fn execute(cli: &SkillCli) -> Result<RenderedOutput, String> {
                 human,
                 json: json!({
                     "command": "eval",
+                    "project_root": project_root,
+                    "report": report,
+                }),
+            })
+        }
+        SkillCommand::Test { package_id } => {
+            let report =
+                test_service::run_package_test(package_id, Some(project_root.root_path.as_str()))?;
+            let human = format!(
+                "Tested {} in {}\nStatus: {}\nSummary: {}",
+                package_id,
+                project_root.root_path,
+                test_status_label(&report.status),
+                report.summary
+            );
+
+            Ok(RenderedOutput {
+                human,
+                json: json!({
+                    "command": "test",
                     "project_root": project_root,
                     "report": report,
                 }),
@@ -547,6 +582,14 @@ fn overall_status_label(status: &crate::domain::eval::EvalOverallStatus) -> &'st
     }
 }
 
+fn test_status_label(status: &crate::domain::test::PackageTestStatus) -> &'static str {
+    match status {
+        crate::domain::test::PackageTestStatus::Passed => "passed",
+        crate::domain::test::PackageTestStatus::Failed => "failed",
+        crate::domain::test::PackageTestStatus::Missing => "missing",
+    }
+}
+
 fn diff_change_label(change: &crate::domain::version::VersionDiffChangeType) -> &'static str {
     match change {
         crate::domain::version::VersionDiffChangeType::Added => "added",
@@ -682,6 +725,27 @@ mod tests {
                 command: SkillCommand::Version(VersionCommand::Diff {
                     version_id: "version-pkg-interview-v3".to_string(),
                 }),
+            }
+        );
+    }
+
+    #[test]
+    fn parser_recognizes_test_command() {
+        let cli = match parse_from(["skill", "--json", "test", "pkg-interview"])
+            .expect("parse test command")
+        {
+            ParseOutcome::Run(cli) => cli,
+            ParseOutcome::Print(_) => panic!("expected runnable cli"),
+        };
+
+        assert_eq!(
+            cli,
+            SkillCli {
+                project_root: None,
+                json: true,
+                command: SkillCommand::Test {
+                    package_id: "pkg-interview".to_string(),
+                },
             }
         );
     }

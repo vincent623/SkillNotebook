@@ -1,10 +1,11 @@
 use crate::domain::common::AppResponse;
 use crate::domain::package::{
     CommitPackagePreviewRequest, CreatePackageFromNlRequest, CreatePackageFromNlResponse,
-    CreatePackageFromSourcesRequest, CreatePackagePreviewResponse, DiscardPackagePreviewRequest,
-    PackageFileContent, PackageFileEntry, PackageUpdateRequest, SearchResult, SkillPackage,
+    CreatePackageFromSourcesRequest, CreatePackageFromUrlRequest, CreatePackagePreviewResponse,
+    DiscardPackagePreviewRequest, PackageExportArtifact, PackageFileContent, PackageFileEntry,
+    PackageUpdateRequest, SearchResult, SkillPackage,
 };
-use crate::services::{package_service, skill_create_service};
+use crate::services::{export_service, package_service, skill_create_service};
 use crate::state::app_state::AppState;
 use crate::utils::errors::not_found;
 
@@ -101,6 +102,19 @@ pub async fn package_generate_preview_from_sources(
 }
 
 #[tauri::command]
+pub async fn package_generate_preview_from_url(
+    req: CreatePackageFromUrlRequest,
+    state: tauri::State<'_, AppState>,
+) -> Result<AppResponse<CreatePackagePreviewResponse>, String> {
+    let root_path = state.current_project_root()?;
+
+    match skill_create_service::generate_package_preview_from_url(&req, Some(root_path.as_str())) {
+        Ok(response) => Ok(AppResponse::success(response)),
+        Err(error) => Ok(AppResponse::failure("package_url_preview_failed", error)),
+    }
+}
+
+#[tauri::command]
 pub async fn package_commit_preview(
     req: CommitPackagePreviewRequest,
     state: tauri::State<'_, AppState>,
@@ -140,6 +154,19 @@ pub async fn package_update(
     match package_service::update_package(&package_id, &payload, Some(root_path.as_str())) {
         Ok(package) => Ok(AppResponse::success(package)),
         Err(error) => Ok(AppResponse::failure("package_update_failed", error)),
+    }
+}
+
+#[tauri::command]
+pub async fn package_export_zip(
+    package_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<AppResponse<PackageExportArtifact>, String> {
+    let root_path = state.current_project_root()?;
+
+    match export_service::export_package_zip(&package_id, Some(root_path.as_str())) {
+        Ok(artifact) => Ok(AppResponse::success(artifact)),
+        Err(error) => Ok(AppResponse::failure("package_export_failed", error)),
     }
 }
 

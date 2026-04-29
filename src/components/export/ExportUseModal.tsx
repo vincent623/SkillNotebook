@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ProjectRoot, SkillPackage } from "../../types/models";
+import { exportPackageZip } from "../../services/tauri-api";
+import type { PackageExportArtifact, ProjectRoot, SkillPackage } from "../../types/models";
 
 interface ExportUseModalProps {
   onClose: () => void;
@@ -64,6 +65,9 @@ function buildExportActions(pkg: SkillPackage, projectRoot: ProjectRoot): Export
 
 export function ExportUseModal({ onClose, pkg, projectRoot }: ExportUseModalProps) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [artifact, setArtifact] = useState<PackageExportArtifact | null>(null);
+  const [exportState, setExportState] = useState<"idle" | "exporting" | "error">("idle");
+  const [exportError, setExportError] = useState<string | null>(null);
   const actions = useMemo(() => buildExportActions(pkg, projectRoot), [pkg, projectRoot]);
 
   useEffect(() => {
@@ -83,6 +87,19 @@ export function ExportUseModal({ onClose, pkg, projectRoot }: ExportUseModalProp
       // The desktop runtime and browser preview have different clipboard permission paths.
     }
     window.setTimeout(() => setCopiedId(null), 3000);
+  }
+
+  async function createZipExport() {
+    setExportState("exporting");
+    setExportError(null);
+    try {
+      const nextArtifact = await exportPackageZip(pkg.id);
+      setArtifact(nextArtifact);
+      setExportState("idle");
+    } catch (error) {
+      setExportState("error");
+      setExportError(error instanceof Error ? error.message : "导出 zip 失败。");
+    }
   }
 
   return (
@@ -110,6 +127,29 @@ export function ExportUseModal({ onClose, pkg, projectRoot }: ExportUseModalProp
             <span>当前项目</span>
             <strong title={projectRoot.rootPath}>{projectRoot.rootPath}</strong>
           </div>
+
+          <article className="export-action export-action-command">
+            <div className="export-action-head">
+              <div>
+                <span>原生导出</span>
+                <h3>Sanitized zip</h3>
+              </div>
+              <button
+                className="button-secondary export-copy-btn"
+                disabled={exportState === "exporting"}
+                onClick={() => { void createZipExport(); }}
+                type="button"
+              >
+                {exportState === "exporting" ? "导出中..." : "生成 zip"}
+              </button>
+            </div>
+            {artifact ? (
+              <pre className="export-action-value">{artifact.zipPath}</pre>
+            ) : (
+              <p className="export-action-note">导出会排除隐藏文件和 notebook.json，生成到当前项目的 .skill-notebook/exports/。</p>
+            )}
+            {exportError ? <div className="inline-banner inline-banner-error">{exportError}</div> : null}
+          </article>
 
           <div className="export-action-list">
             {actions.map((action) => (

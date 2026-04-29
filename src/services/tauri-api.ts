@@ -7,11 +7,13 @@ import type {
   CreatePackageFromNlRequest,
   CreatePackageFromNlResponse,
   CreatePackageFromSourcesRequest,
+  CreatePackageFromUrlRequest,
   CreatePackagePreviewResponse,
   DiscardPackagePreviewRequest,
   EvalReport,
   FileContent,
   FileEntry,
+  PackageExportArtifact,
   PackagePreviewFile,
   PackageTestReport,
   PackageUpdateRequest,
@@ -564,6 +566,42 @@ function makeDemoCreatePreviewFromSources(
   return JSON.parse(JSON.stringify(preview)) as CreatePackagePreviewResponse;
 }
 
+function makeDemoCreatePreviewFromUrl(
+  payload: CreatePackageFromUrlRequest,
+): CreatePackagePreviewResponse {
+  const url = payload.url.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error("URL must start with http:// or https://.");
+  }
+
+  const inventory = [
+    "# URL Source",
+    "",
+    "Browser preview records the URL as source material. Native Tauri mode fetches the page and adds an excerpt when possible.",
+    "",
+    `- URL: ${url}`,
+    "",
+  ].join("\n");
+  const preview = makeDemoCreatePreview({
+    projectRootId: payload.projectRootId,
+    prompt: payload.prompt?.trim() || `Create a reusable skill from ${url}.`,
+    context: [
+      payload.context?.trim(),
+      `Source URL: ${url}`,
+    ].filter(Boolean).join("\n"),
+  });
+  preview.files.push({
+    path: "references/url-source.md",
+    content: inventory,
+    encoding: "utf-8",
+  });
+  preview.fileTree = filesToTree(preview.files);
+  preview.generationSummary = `${preview.generationSummary} URL source attached.`;
+  demoCreatePreviews[preview.previewId] = preview;
+
+  return JSON.parse(JSON.stringify(preview)) as CreatePackagePreviewResponse;
+}
+
 function commitDemoCreatePreview(
   payload: CommitPackagePreviewRequest,
 ): CreatePackageFromNlResponse {
@@ -1045,6 +1083,19 @@ export async function openProjectRoot(rootPath: string): Promise<ProjectRoot> {
   }
 }
 
+export async function createProjectRoot(name: string): Promise<ProjectRoot> {
+  if (!hasTauriRuntime()) {
+    throw runtimeRequiredError("project root creation");
+  }
+
+  try {
+    const response = await invoke<AppEnvelope<ProjectRoot>>("project_root_create", { name });
+    return unwrapResponse(response);
+  } catch (error) {
+    throw wrapRuntimeError("project root creation", error);
+  }
+}
+
 export async function createPackageFromNl(
   payload: CreatePackageFromNlRequest,
 ): Promise<CreatePackageFromNlResponse> {
@@ -1096,6 +1147,24 @@ export async function generatePackagePreviewFromSources(
     return unwrapResponse(response);
   } catch (error) {
     throw wrapRuntimeError("Package source preview generation", error);
+  }
+}
+
+export async function generatePackagePreviewFromUrl(
+  payload: CreatePackageFromUrlRequest,
+): Promise<CreatePackagePreviewResponse> {
+  if (!hasTauriRuntime()) {
+    return makeDemoCreatePreviewFromUrl(payload);
+  }
+
+  try {
+    const response = await invoke<AppEnvelope<CreatePackagePreviewResponse>>(
+      "package_generate_preview_from_url",
+      { req: payload },
+    );
+    return unwrapResponse(response);
+  } catch (error) {
+    throw wrapRuntimeError("Package URL preview generation", error);
   }
 }
 
@@ -1151,6 +1220,21 @@ export async function updatePackage(
     return unwrapResponse(response);
   } catch (error) {
     throw wrapRuntimeError("Package updates", error);
+  }
+}
+
+export async function exportPackageZip(packageId: string): Promise<PackageExportArtifact> {
+  if (!hasTauriRuntime()) {
+    throw runtimeRequiredError("Native package export");
+  }
+
+  try {
+    const response = await invoke<AppEnvelope<PackageExportArtifact>>("package_export_zip", {
+      packageId,
+    });
+    return unwrapResponse(response);
+  } catch (error) {
+    throw wrapRuntimeError("Native package export", error);
   }
 }
 

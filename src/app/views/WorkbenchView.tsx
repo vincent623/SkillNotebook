@@ -1,11 +1,12 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { SkillLibraryColumn } from "../../components/library/SkillLibraryColumn";
 import { FileColumnBrowser } from "../../components/browser/FileColumnBrowser";
 import { EditorArea } from "../../components/notebook/EditorArea";
+import { PackageMetadataPanel } from "../../components/notebook/PackageMetadataPanel";
 import { useEditorStore } from "../../stores/editor-store";
 import { useProjectStore } from "../../stores/project-store";
 import { useUiStore } from "../../stores/ui-store";
-import type { EvalReport } from "../../types/models";
+import type { EvalReport, SkillPackage } from "../../types/models";
 
 function ArchiveIcon() {
   return (
@@ -43,17 +44,76 @@ function ValidationPanel({ evalReport }: { evalReport?: EvalReport }) {
   );
 }
 
-function EmptyContentPane({ evalReport }: { evalReport?: EvalReport }) {
+function EmptyContentPane({ evalReport, pkg }: { evalReport?: EvalReport; pkg: SkillPackage }) {
   return (
-    <div className="workbench-empty-pane is-large">
-      <ArchiveIcon />
-      <span>从左侧选择一个文件</span>
-      <ValidationPanel evalReport={evalReport} />
+    <div className="workbench-empty-pane is-metadata">
+      <PackageMetadataPanel evalReport={evalReport} pkg={pkg} />
+      <div className="metadata-file-hint">
+        <ArchiveIcon />
+        <span>从左侧选择一个文件进入预览或编辑。</span>
+        <ValidationPanel evalReport={evalReport} />
+      </div>
+    </div>
+  );
+}
+
+type PendingNavigation =
+  | { kind: "package"; packageId: string }
+  | { kind: "file"; path: string };
+
+function DirtySwitchModal({
+  isSaving,
+  onCancel,
+  onDiscard,
+  onSave,
+}: {
+  isSaving: boolean;
+  onCancel: () => void;
+  onDiscard: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="version-modal-overlay" onClick={onCancel} role="presentation">
+      <div
+        aria-labelledby="dirty-switch-title"
+        aria-modal="true"
+        className="version-modal version-action-modal dirty-switch-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="version-modal-header">
+          <div>
+            <span className="version-modal-eyebrow is-danger">Unsaved</span>
+            <h3 id="dirty-switch-title">当前文件有未保存修改</h3>
+            <p className="muted version-modal-subtitle">切换前需要决定如何处理这份草稿。</p>
+          </div>
+          <button className="button-secondary version-modal-close" onClick={onCancel} type="button">
+            关闭
+          </button>
+        </div>
+        <div className="version-modal-body version-action-body">
+          <div className="version-restore-warning">
+            继续切换会替换当前编辑区。可以先保存，再继续切换；也可以放弃这次未保存修改。
+          </div>
+        </div>
+        <div className="version-modal-footer">
+          <button className="button-secondary" disabled={isSaving} onClick={onCancel} type="button">
+            取消
+          </button>
+          <button className="button-secondary" disabled={isSaving} onClick={onDiscard} type="button">
+            放弃修改
+          </button>
+          <button className="button-primary" disabled={isSaving} onClick={onSave} type="button">
+            {isSaving ? "保存中..." : "保存并继续"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
 export function WorkbenchView() {
+  const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null);
   const bootstrap = useProjectStore((state) => state.bootstrap);
   const status = useProjectStore((state) => state.status);
   const selectedPackageId = useProjectStore((state) => state.selectedPackageId);
@@ -63,10 +123,13 @@ export function WorkbenchView() {
   const fileTree = useEditorStore((state) => state.fileTree);
   const currentFilePath = useEditorStore((state) => state.currentFilePath);
   const isTreeLoading = useEditorStore((state) => state.isTreeLoading);
+  const isDirty = useEditorStore((state) => state.isDirty);
+  const isSaving = useEditorStore((state) => state.isSaving);
   const fileError = useEditorStore((state) => state.fileError);
   const treeError = useEditorStore((state) => state.treeError);
   const loadFileTree = useEditorStore((state) => state.loadFileTree);
   const openFile = useEditorStore((state) => state.openFile);
+  const saveFile = useEditorStore((state) => state.saveFile);
   const resetEditor = useEditorStore((state) => state.reset);
 
   const pkg = bootstrap?.packages.find((item) => item.id === selectedPackageId) ?? null;
@@ -77,6 +140,65 @@ export function WorkbenchView() {
     resetEditor();
     void loadFileTree(selectedPackageId);
   }, [loadFileTree, resetEditor, selectedPackageId]);
+
+  useEffect(() => {
+    if (!isDirty) return undefined;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [isDirty]);
+
+  const runPendingNavigation = (pending: PendingNavigation) => {
+    if (pending.kind === "package") {
+      selectPackage(pending.packageId);
+      setCurrentScreen("notebook");
+      return;
+    }
+
+    if (pkg) {
+      void openFile(pkg.id, pending.path);
+    }
+  };
+
+  const requestPackageSelect = (packageId: string) => {
+    if (isDirty && packageId !== selectedPackageId) {
+      setPendingNavigation({ kind: "package", packageId });
+      return;
+    }
+    selectPackage(packageId);
+    setCurrentScreen("notebook");
+  };
+
+  const requestFileSelect = (path: string) => {
+    if (isDirty && currentFilePath && path !== currentFilePath) {
+      setPendingNavigation({ kind: "file", path });
+      return;
+    }
+    if (pkg) {
+      void openFile(pkg.id, path);
+    }
+  };
+
+  const saveAndContinue = async () => {
+    if (!pendingNavigation || !selectedPackageId) return;
+    const saved = await saveFile(selectedPackageId);
+    if (!saved) return;
+    const pending = pendingNavigation;
+    setPendingNavigation(null);
+    runPendingNavigation(pending);
+  };
+
+  const discardAndContinue = () => {
+    if (!pendingNavigation) return;
+    const pending = pendingNavigation;
+    setPendingNavigation(null);
+    runPendingNavigation(pending);
+  };
 
   if (!bootstrap) {
     return (
@@ -92,10 +214,7 @@ export function WorkbenchView() {
       <SkillLibraryColumn
         bootstrap={bootstrap}
         onCreate={() => setCurrentScreen("create")}
-        onSelectPackage={(packageId) => {
-          selectPackage(packageId);
-          setCurrentScreen("notebook");
-        }}
+        onSelectPackage={requestPackageSelect}
         selectedPackageId={selectedPackageId}
       />
 
@@ -107,7 +226,7 @@ export function WorkbenchView() {
             errorMessage={treeError}
             isLoading={isTreeLoading}
             packageSlug={pkg.slug}
-            onSelectFile={(path) => { void openFile(pkg.id, path); }}
+            onSelectFile={requestFileSelect}
           />
         ) : (
           <div className="workbench-empty-pane">
@@ -122,7 +241,7 @@ export function WorkbenchView() {
           currentFilePath || fileError ? (
             <EditorArea packageId={pkg.id} />
           ) : (
-            <EmptyContentPane evalReport={evalReport} />
+            <EmptyContentPane evalReport={evalReport} pkg={pkg} />
           )
         ) : (
           <div className="workbench-empty-pane is-large">
@@ -131,6 +250,14 @@ export function WorkbenchView() {
           </div>
         )}
       </main>
+      {pendingNavigation ? (
+        <DirtySwitchModal
+          isSaving={isSaving}
+          onCancel={() => setPendingNavigation(null)}
+          onDiscard={discardAndContinue}
+          onSave={() => { void saveAndContinue(); }}
+        />
+      ) : null}
     </section>
   );
 }

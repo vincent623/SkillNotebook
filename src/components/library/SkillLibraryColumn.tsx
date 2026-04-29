@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import type { AppBootstrap, SkillPackage } from "../../types/models";
+import { StatusBadge } from "../common/StatusBadge";
+import type { AppBootstrap, EvalReport, SkillPackage } from "../../types/models";
 
 interface SkillLibraryColumnProps {
   bootstrap: AppBootstrap;
@@ -127,6 +128,7 @@ export function SkillLibraryColumn({
           packages.map((item) => (
             <SkillRow
               active={selectedPackageId === item.id}
+              evalReport={bootstrap.evalReports.find((report) => report.packageId === item.id)}
               item={item}
               key={item.id}
               onSelectPackage={onSelectPackage}
@@ -140,13 +142,19 @@ export function SkillLibraryColumn({
 
 function SkillRow({
   active,
+  evalReport,
   item,
   onSelectPackage,
 }: {
   active: boolean;
+  evalReport?: EvalReport;
   item: SkillPackage;
   onSelectPackage: (packageId: string) => void;
 }) {
+  const score = evalReport
+    ? Math.round(((evalReport.completenessScore + evalReport.clarityScore + evalReport.executabilityScore) / 3) * 100)
+    : null;
+
   return (
     <button
       className={`skill-library-row ${active ? "is-active" : ""}`}
@@ -158,6 +166,12 @@ function SkillRow({
         <span className="skill-row-version">v{item.currentVersion}</span>
       </span>
       <span className="skill-row-desc">{item.description}</span>
+      <span className="skill-row-quality">
+        <StatusBadge status={item.status} />
+        <span className={`skill-row-score ${score == null ? "is-empty" : ""}`}>
+          {score == null ? "未评估" : `${score}`}
+        </span>
+      </span>
       <span className="skill-row-foot">
         <span>{formatShortDate(item.updatedAt)}</span>
         {item.tags.slice(0, 2).map((tag) => (

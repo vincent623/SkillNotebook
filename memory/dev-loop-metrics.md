@@ -165,12 +165,27 @@
 
 | Metric | Value | Notes |
 | --- | --- | --- |
-| Prototype main-flow UI gaps | 0 | Workbench, file browser, editor preview, export/use, preview create, eval/version gate, and smoke test action are represented in production UI. |
-| Scaffolded `package_run_test` gap | closed | Local smoke JSON execution is now wired through backend, frontend API, store, and quality gate UI. |
-| Create source gaps | 1 | File/directory generation is implemented; URL-based generation remains planned and disabled. |
+| Prototype main-flow UI gaps | 0 | Workbench, file browser, editor preview, export/use, preview create, eval/version gate, smoke test action, and metadata editing are represented in production UI. |
+| Scaffolded `package_run_test` gap | closed | Local smoke JSON execution is now wired through backend, frontend API, store, quality gate UI, and CLI `skill test`. |
+| Create source gaps | 0 | Text, file/directory, and URL preview generation are all available; URL previews attach `references/url-source.md`. |
 | Preview lifecycle gap | 0 | Active discard, commit cleanup, and passive TTL cleanup are all implemented. |
-| Test execution depth gap | 1 | Shell/script-backed execution is still future work behind an explicit safety boundary. |
-| Infrastructure gaps | 1+ | Filesystem watch refresh remains open; native export/zip is still a product gap. |
+| Test execution depth gap | 0 | `tests/*.json` can declare package-local `scripts/` or `tests/` script execution with path traversal and symlink checks plus a timeout. |
+| Infrastructure gaps | 0 | Recent project roots persist across app launches; clean-editor polling refresh covers bootstrap, file tree, and open-file external edits; sanitized zip export is implemented. |
+
+### Full Spec Gap Closure
+
+| Metric | Value | Notes |
+| --- | --- | --- |
+| Topbar project-root/status/settings alignment | implemented | Topbar now shows active project root, load status, and settings icon entry. |
+| Settings project-root workflow | implemented | Settings exposes current root, clickable recent roots, project-root creation, `.skills`, version cap, and creation bridge status. |
+| Dirty editor switch protection | implemented | File/package switches and top-level navigation gate dirty edits with save/discard/cancel decisions. |
+| Library metadata density | implemented | Library rows show package status and latest eval score alongside version/date/tags. |
+| Package metadata edit UI | implemented | Empty content pane now exposes editable name/description/status/tags/related/bundle metadata backed by `package_update`. |
+| URL create mode | implemented | Native mode fetches `http(s)` source text with bounded curl-based ingestion; browser fallback records the URL source. |
+| Script-backed package tests | implemented | CLI/API test reports include script execution checks; sample `pdf-brief-builder` smoke test declares `scripts/run.sh`. |
+| Native sanitized export | implemented | Tauri command writes zip artifacts to `.skill-notebook/exports/`, excluding hidden files and `notebook.json`. |
+| Watch refresh | implemented | Browser workbench refreshes bootstrap/file tree/open file every 5s only when the editor is clean and visible. |
+| Gap closure validation | green | `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `cargo test --manifest-path src-tauri/Cargo.toml` (36 tests), `npm run lint`, `npm run build`, CLI `skill test`, CLI `skill find`, and Playwright browser checks pass. |
 
 ### Prototype Parity Regression Repair
 

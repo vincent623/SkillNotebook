@@ -1,5 +1,6 @@
 {
   "name": "pdf-brief-builder-smoke",
   "input": ["doc-a.pdf", "doc-b.pdf"],
-  "expects": ["summary", "sources", "gaps"]
+  "expects": ["summary", "sources", "gaps"],
+  "script": "scripts/run.sh"
 }

@@ -8,6 +8,7 @@ import {
   discardPackagePreview,
   generatePackagePreviewFromNl,
   generatePackagePreviewFromSources,
+  generatePackagePreviewFromUrl,
 } from "../../services/tauri-api";
 import { useProjectStore } from "../../stores/project-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -17,7 +18,7 @@ import type {
 } from "../../types/models";
 
 type CreatePreviewStatus = "idle" | "generating" | "preview" | "committing" | "error";
-type CreateInputMode = "text" | "files";
+type CreateInputMode = "text" | "files" | "url";
 
 function normalizePath(path: string) {
   return path.replaceAll("\\", "/");
@@ -60,6 +61,7 @@ export function CreateView() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [inputMode, setInputMode] = useState<CreateInputMode>("text");
   const [sourcePaths, setSourcePaths] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
 
   const selectedPreviewFile = useMemo(() => {
     if (!preview || !selectedPreviewPath) return null;
@@ -77,7 +79,11 @@ export function CreateView() {
     bootstrap &&
       !isGenerating &&
       !isCommitting &&
-      (inputMode === "text" ? createPrompt.trim() : sourcePathList.length > 0),
+      (inputMode === "text"
+        ? createPrompt.trim()
+        : inputMode === "files"
+          ? sourcePathList.length > 0
+          : sourceUrl.trim()),
   );
 
   useEffect(() => {
@@ -114,6 +120,11 @@ export function CreateView() {
       setErrorMessage("至少输入一个本地文件或目录路径。");
       return;
     }
+    if (inputMode === "url" && !/^https?:\/\//i.test(sourceUrl.trim())) {
+      setStatus("error");
+      setErrorMessage("请输入以 http:// 或 https:// 开头的 URL。");
+      return;
+    }
 
     setStatus("generating");
     setErrorMessage(null);
@@ -126,7 +137,14 @@ export function CreateView() {
             prompt: prompt || null,
             context: context || null,
           })
-        : await generatePackagePreviewFromNl({
+        : inputMode === "url"
+          ? await generatePackagePreviewFromUrl({
+              projectRootId: bootstrap.projectRoot.id,
+              url: sourceUrl.trim(),
+              prompt: prompt || null,
+              context: context || null,
+            })
+          : await generatePackagePreviewFromNl({
             projectRootId: bootstrap.projectRoot.id,
             prompt,
             context: context || null,
@@ -156,6 +174,7 @@ export function CreateView() {
       setCreatePrompt("");
       setCreateContext("");
       setSourcePaths("");
+      setSourceUrl("");
       setPreview(null);
       setSelectedPreviewPath(null);
       setStatus("idle");
@@ -198,7 +217,15 @@ export function CreateView() {
             >
               文件/目录
             </button>
-            <button disabled type="button">
+            <button
+              className={inputMode === "url" ? "is-active" : ""}
+              disabled={isGenerating || isCommitting}
+              onClick={() => {
+                setInputMode("url");
+                if (preview) clearPreview();
+              }}
+              type="button"
+            >
               URL
             </button>
           </div>
@@ -220,9 +247,26 @@ export function CreateView() {
               </span>
             </label>
           ) : null}
+          {inputMode === "url" ? (
+            <label className="field-stack">
+              <span className="field-label">来源 URL</span>
+              <input
+                className="detail-save-input"
+                onChange={(event) => {
+                  setSourceUrl(event.target.value);
+                  if (preview) clearPreview();
+                }}
+                placeholder="https://example.com/source"
+                value={sourceUrl}
+              />
+              <span className="create-field-hint">
+                Native 模式会抓取页面文本并写入 references/url-source.md；浏览器预览会记录 URL 作为来源。
+              </span>
+            </label>
+          ) : null}
           <label className="field-stack">
             <span className="field-label">
-              {inputMode === "files" ? "生成目标（可选）" : "这个技能要做什么？"}
+              {inputMode === "text" ? "这个技能要做什么？" : "生成目标（可选）"}
             </span>
             <textarea
               className="form-textarea"

@@ -11,8 +11,8 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 
 use crate::domain::package::{
     CommitPackagePreviewRequest, CreatePackageFromNlRequest, CreatePackageFromNlResponse,
-    CreatePackageFromSourcesRequest, CreatePackagePreviewResponse, DiscardPackagePreviewRequest,
-    PackageNotebookDocument, PackagePreviewFile, PackageStatus,
+    CreatePackageFromSourcesRequest, CreatePackageFromUrlRequest, CreatePackagePreviewResponse,
+    DiscardPackagePreviewRequest, PackageNotebookDocument, PackagePreviewFile, PackageStatus,
 };
 use crate::services::eval_service;
 use crate::storage::filesystem;
@@ -31,6 +31,8 @@ const CREATE_PREVIEW_TTL_HOURS: i64 = 24;
 const SOURCE_FILE_LIMIT: usize = 40;
 const SOURCE_EXCERPT_LIMIT_CHARS: usize = 1800;
 const SOURCE_CONTEXT_LIMIT_CHARS: usize = 18_000;
+const URL_SOURCE_LIMIT_BYTES: usize = 1_048_576;
+const URL_CONTEXT_LIMIT_CHARS: usize = 16_000;
 
 #[derive(Debug, Clone)]
 struct DraftPackage {
@@ -121,6 +123,13 @@ struct SourceFileSummary {
     excerpt: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct UrlSourceContext {
+    url: String,
+    inventory_markdown: String,
+    generation_context: String,
+}
+
 pub fn create_package_from_nl(
     req: &CreatePackageFromNlRequest,
     root_path: Option<&str>,
@@ -156,6 +165,20 @@ pub fn generate_package_preview_from_sources(
     let project_root_path = filesystem::project_root_for_id(&req.project_root_id, root_path)?;
     let options = resolve_creator_bridge_options();
     generate_package_preview_from_sources_in_workspace_with_options(
+        &project_root_path,
+        &req.project_root_id,
+        req,
+        &options,
+    )
+}
+
+pub fn generate_package_preview_from_url(
+    req: &CreatePackageFromUrlRequest,
+    root_path: Option<&str>,
+) -> Result<CreatePackagePreviewResponse, String> {
+    let project_root_path = filesystem::project_root_for_id(&req.project_root_id, root_path)?;
+    let options = resolve_creator_bridge_options();
+    generate_package_preview_from_url_in_workspace_with_options(
         &project_root_path,
         &req.project_root_id,
         req,
@@ -470,6 +493,66 @@ fn generate_package_preview_from_sources_in_workspace_with_options(
     Ok(response)
 }
 
+fn generate_package_preview_from_url_in_workspace_with_options(
+    project_root_path: &Path,
+    project_root_id: &str,
+    req: &CreatePackageFromUrlRequest,
+    options: &CreatorBridgeOptions,
+) -> Result<CreatePackagePreviewResponse, String> {
+    let url_context = build_url_source_context(&req.url)?;
+    let source_goal = req
+        .prompt
+        .as_deref()
+        .map(normalize_text)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| format!("Create a reusable skill from {}.", url_context.url));
+    let mut context_parts = Vec::new();
+    if let Some(context) = req
+        .context
+        .as_deref()
+        .map(normalize_text)
+        .filter(|value| !value.trim().is_empty())
+    {
+        context_parts.push(format!("User notes:\n{}", context));
+    }
+    context_parts.push(url_context.generation_context.clone());
+
+    let synthetic_req = CreatePackageFromNlRequest {
+        project_root_id: project_root_id.to_string(),
+        prompt: source_goal,
+        context: Some(context_parts.join("\n\n")),
+    };
+    let mut response = generate_package_preview_in_workspace_with_options(
+        project_root_path,
+        project_root_id,
+        &synthetic_req,
+        options,
+    )?;
+    let source_file = PackagePreviewFile {
+        path: "references/url-source.md".to_string(),
+        content: url_context.inventory_markdown,
+        encoding: "utf-8".to_string(),
+    };
+    let preview_root = preview_dir(project_root_path, &safe_preview_id(&response.preview_id)?);
+    let preview_package_root = preview_root.join("package");
+    filesystem::write_text_file(
+        &preview_package_root.join(&source_file.path),
+        &source_file.content,
+    )?;
+    response.files.push(source_file);
+    response.file_tree = filesystem::list_package_file_tree(&preview_package_root)?;
+    response.generation_summary = format!(
+        "{} URL source attached from {}.",
+        response.generation_summary, url_context.url
+    );
+    let manifest_path = preview_root.join("preview.json");
+    let mut manifest = read_preview_manifest(&manifest_path)?;
+    manifest.generation_summary = response.generation_summary.clone();
+    filesystem::write_json_file(&manifest_path, &manifest)?;
+
+    Ok(response)
+}
+
 fn commit_package_preview_in_workspace(
     project_root_path: &Path,
     req: &CommitPackagePreviewRequest,
@@ -758,6 +841,88 @@ fn build_source_context(
         inventory_markdown,
         generation_context,
     })
+}
+
+fn build_url_source_context(raw_url: &str) -> Result<UrlSourceContext, String> {
+    let url = raw_url.trim();
+    if !is_http_url(url) {
+        return Err("URL source must start with http:// or https://".to_string());
+    }
+    if url.chars().any(char::is_whitespace) {
+        return Err("URL source cannot contain whitespace".to_string());
+    }
+
+    let fetched = fetch_url_text(url)?;
+    let excerpt = truncate_chars(&fetched, URL_CONTEXT_LIMIT_CHARS);
+    let inventory_markdown = format!(
+        "# URL Source\n\n- URL: {}\n- Fetched bytes: {}\n\n## Text Excerpt\n\n```text\n{}\n```\n",
+        url,
+        fetched.len(),
+        excerpt
+    );
+    let generation_context = truncate_chars(
+        &format!(
+            "Remote URL source:\n{}\n\nFetched text excerpt:\n{}",
+            url, excerpt
+        ),
+        URL_CONTEXT_LIMIT_CHARS,
+    );
+
+    Ok(UrlSourceContext {
+        url: url.to_string(),
+        inventory_markdown,
+        generation_context,
+    })
+}
+
+fn is_http_url(value: &str) -> bool {
+    let lowered = value.to_lowercase();
+    lowered.starts_with("http://") || lowered.starts_with("https://")
+}
+
+fn fetch_url_text(url: &str) -> Result<String, String> {
+    if !command_exists("curl") {
+        return Err("URL generation requires curl on PATH".to_string());
+    }
+
+    let output = Command::new("curl")
+        .arg("--location")
+        .arg("--max-time")
+        .arg("12")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--fail")
+        .arg("--user-agent")
+        .arg("SkillNotebook/0.1")
+        .arg(url)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("failed to fetch URL with curl: {}", error))?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "URL fetch failed: {}",
+            summarize_error(error.trim())
+        ));
+    }
+
+    let bytes = if output.stdout.len() > URL_SOURCE_LIMIT_BYTES {
+        &output.stdout[..URL_SOURCE_LIMIT_BYTES]
+    } else {
+        &output.stdout
+    };
+    let text = String::from_utf8_lossy(bytes)
+        .replace('\0', "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if text.trim().is_empty() {
+        return Err("URL fetched successfully, but no readable text was found".to_string());
+    }
+
+    Ok(text)
 }
 
 fn resolve_source_path(project_root_path: &Path, raw_path: &str) -> Result<PathBuf, String> {

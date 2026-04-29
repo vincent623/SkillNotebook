@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEditorStore } from "../../stores/editor-store";
 import { useProjectStore } from "../../stores/project-store";
 import { useUiStore } from "../../stores/ui-store";
 
@@ -29,6 +30,7 @@ export function CommandPalette() {
   const selectPackage = useProjectStore((state) => state.selectPackage);
   const runEval = useProjectStore((state) => state.runEval);
   const runTest = useProjectStore((state) => state.runTest);
+  const isDirty = useEditorStore((state) => state.isDirty);
 
   const selectedPackage = bootstrap?.packages.find((item) => item.id === selectedPackageId) ?? null;
   const handleClose = useCallback(() => {
@@ -36,6 +38,10 @@ export function CommandPalette() {
     setNotice(null);
     close();
   }, [close]);
+  const canLeaveDirtyEditor = useCallback(() => {
+    if (!isDirty) return true;
+    return window.confirm("当前文件有未保存修改。继续会放弃这次修改。");
+  }, [isDirty]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -55,6 +61,7 @@ export function CommandPalette() {
           subtitle: `${pkg.slug} · v${pkg.currentVersion}`,
           keywords: [pkg.description, pkg.status, ...pkg.tags].join(" "),
           run: () => {
+            if (!canLeaveDirtyEditor()) return;
             selectPackage(pkg.id);
             setCurrentScreen("notebook");
             handleClose();
@@ -70,6 +77,7 @@ export function CommandPalette() {
         subtitle: "从自然语言描述生成一个草稿包",
         keywords: "create generate new skill",
         run: () => {
+          if (!canLeaveDirtyEditor()) return;
           setCurrentScreen("create");
           handleClose();
         },
@@ -80,6 +88,7 @@ export function CommandPalette() {
         subtitle: "切换项目根目录、查看运行配置",
         keywords: "settings project root",
         run: () => {
+          if (!canLeaveDirtyEditor()) return;
           setCurrentScreen("settings");
           handleClose();
         },
@@ -132,7 +141,7 @@ export function CommandPalette() {
     }
 
     return items;
-  }, [bootstrap, handleClose, openVersionPanel, runEval, runTest, selectPackage, selectedPackage, setCurrentScreen]);
+  }, [bootstrap, canLeaveDirtyEditor, handleClose, openVersionPanel, runEval, runTest, selectPackage, selectedPackage, setCurrentScreen]);
 
   const visibleCommands = commands.filter((command) => commandMatches(command, query)).slice(0, 12);
 

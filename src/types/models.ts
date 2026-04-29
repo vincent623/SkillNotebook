@@ -196,6 +196,13 @@ export interface CreatePackageFromSourcesRequest {
   context?: string | null;
 }
 
+export interface CreatePackageFromUrlRequest {
+  projectRootId: string;
+  url: string;
+  prompt?: string | null;
+  context?: string | null;
+}
+
 export interface PackageUpdateRequest {
   name?: string | null;
   description?: string | null;
@@ -245,5 +252,12 @@ export interface CreatePackagePreviewResponse {
   fileTree: FileEntry[];
   generatorUsed: string;
   generationSummary: string;
+  createdAt: string;
+}
+
+export interface PackageExportArtifact {
+  packageId: string;
+  zipPath: string;
+  sizeBytes: number;
   createdAt: string;
 }

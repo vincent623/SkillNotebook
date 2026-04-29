@@ -1,5 +1,10 @@
 use std::fs;
+use std::io::Read;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -10,6 +15,9 @@ use crate::domain::test::{
 use crate::storage::filesystem;
 use crate::utils::ids::slugify;
 use crate::utils::time::now_iso;
+
+const SCRIPT_TEST_TIMEOUT_SECS: u64 = 15;
+const SCRIPT_TEST_POLL_INTERVAL_MS: u64 = 100;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -22,6 +30,9 @@ struct SmokeTestDefinition {
     expected_output: Option<String>,
     #[serde(alias = "expects", alias = "expectations")]
     checks: Vec<String>,
+    #[serde(alias = "scriptPath")]
+    script: Option<String>,
+    args: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +224,10 @@ fn run_test_file(
         checks.push(evaluate_expectation(&expectation, context));
     }
 
+    if let Some(script) = definition.script.as_deref() {
+        checks.push(run_script_check(package_root, script, &definition.args));
+    }
+
     let passed = checks.iter().all(|item| item.passed);
     Ok(PackageTestFileResult {
         path: relative,
@@ -223,6 +238,181 @@ fn run_test_file(
         passed,
         checks,
     })
+}
+
+fn run_script_check(package_root: &Path, script: &str, args: &[String]) -> PackageTestCheckResult {
+    match run_package_script(package_root, script, args) {
+        Ok(evidence) => PackageTestCheckResult {
+            description: format!("Script `{}` exits successfully.", script),
+            passed: true,
+            evidence,
+        },
+        Err(error) => PackageTestCheckResult {
+            description: format!("Script `{}` exits successfully.", script),
+            passed: false,
+            evidence: error,
+        },
+    }
+}
+
+fn run_package_script(
+    package_root: &Path,
+    script: &str,
+    args: &[String],
+) -> Result<String, String> {
+    let script_path = resolve_script_path(package_root, script)?;
+    let metadata = fs::symlink_metadata(&script_path)
+        .map_err(|error| format!("failed to inspect script {}: {}", script, error))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!("refusing to execute symlinked script: {}", script));
+    }
+    if !metadata.is_file() {
+        return Err(format!("script is not a file: {}", script));
+    }
+    if args
+        .iter()
+        .any(|arg| arg.contains('\0') || arg.len() > 1000)
+    {
+        return Err("script args contain an invalid value".to_string());
+    }
+
+    let mut command = if script_path
+        .extension()
+        .map(|value| value.to_string_lossy().eq_ignore_ascii_case("sh"))
+        .unwrap_or(false)
+    {
+        let mut command = Command::new("/bin/bash");
+        command.arg(&script_path);
+        command
+    } else if metadata.permissions().mode() & 0o111 != 0 {
+        Command::new(&script_path)
+    } else {
+        return Err(format!(
+            "script is not executable and is not a .sh file: {}",
+            script
+        ));
+    };
+
+    command
+        .args(args)
+        .current_dir(package_root)
+        .env("SKILL_NOTEBOOK_PACKAGE_ROOT", package_root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to spawn script {}: {}", script, error))?;
+    let timeout = Duration::from_secs(SCRIPT_TEST_TIMEOUT_SECS);
+    let started_at = Instant::now();
+
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("failed waiting for script {}: {}", script, error))?
+        {
+            let stdout = read_child_stream(child.stdout.take()).unwrap_or_default();
+            let stderr = read_child_stream(child.stderr.take()).unwrap_or_default();
+            if status.success() {
+                return Ok(summarize_script_output(&stdout, &stderr));
+            }
+
+            return Err(format!(
+                "script exited {}. {}",
+                status,
+                summarize_script_output(&stdout, &stderr)
+            ));
+        }
+
+        if started_at.elapsed() >= timeout {
+            child.kill().ok();
+            child.wait().ok();
+            let stdout = read_child_stream(child.stdout.take()).unwrap_or_default();
+            let stderr = read_child_stream(child.stderr.take()).unwrap_or_default();
+            return Err(format!(
+                "script timed out after {}s. {}",
+                SCRIPT_TEST_TIMEOUT_SECS,
+                summarize_script_output(&stdout, &stderr)
+            ));
+        }
+
+        thread::sleep(Duration::from_millis(SCRIPT_TEST_POLL_INTERVAL_MS));
+    }
+}
+
+fn resolve_script_path(package_root: &Path, script: &str) -> Result<PathBuf, String> {
+    let raw = script.trim();
+    if raw.is_empty() {
+        return Err("script path cannot be empty".to_string());
+    }
+    let candidate = Path::new(raw);
+    if candidate.is_absolute() {
+        return Err(format!("script path must be package-relative: {}", raw));
+    }
+
+    let mut cleaned = PathBuf::new();
+    for component in candidate.components() {
+        match component {
+            std::path::Component::Normal(part) => cleaned.push(part),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                return Err(format!(
+                    "script path cannot traverse outside package: {}",
+                    raw
+                ));
+            }
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                return Err(format!("script path must be package-relative: {}", raw));
+            }
+        }
+    }
+
+    let normalized = cleaned.to_string_lossy().replace('\\', "/");
+    if !(normalized.starts_with("scripts/") || normalized.starts_with("tests/")) {
+        return Err(format!(
+            "script must live under scripts/ or tests/: {}",
+            normalized
+        ));
+    }
+
+    Ok(package_root.join(cleaned))
+}
+
+fn read_child_stream<T: Read>(stream: Option<T>) -> Result<String, String> {
+    let Some(mut stream) = stream else {
+        return Ok(String::new());
+    };
+
+    let mut buffer = String::new();
+    stream
+        .read_to_string(&mut buffer)
+        .map_err(|error| format!("failed to read script output: {}", error))?;
+    Ok(buffer)
+}
+
+fn summarize_script_output(stdout: &str, stderr: &str) -> String {
+    let mut parts = Vec::new();
+    let stdout = stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+    let stderr = stderr.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !stdout.is_empty() {
+        parts.push(format!("stdout: {}", truncate_evidence(&stdout)));
+    }
+    if !stderr.is_empty() {
+        parts.push(format!("stderr: {}", truncate_evidence(&stderr)));
+    }
+    if parts.is_empty() {
+        "No output.".to_string()
+    } else {
+        parts.join(" ")
+    }
+}
+
+fn truncate_evidence(value: &str) -> String {
+    let mut truncated = value.chars().take(240).collect::<String>();
+    if value.chars().count() > 240 {
+        truncated.push_str("...");
+    }
+    truncated
 }
 
 fn evaluate_expectation(expectation: &str, context: &PackageTestContext) -> PackageTestCheckResult {
@@ -605,5 +795,33 @@ mod tests {
         assert_eq!(report.total_tests, 1);
         assert_eq!(report.failed_tests, 1);
         assert!(report.files[0].checks[0].evidence.contains("Parse error"));
+    }
+
+    #[test]
+    fn runs_package_local_script_when_declared() {
+        let project_root_path = tmp_project_root_path();
+        let root = copy_example_project_root(&project_root_path);
+        let package_root = filesystem::canonical_skills_root(&root).join("pdf-brief-builder");
+        filesystem::write_text_file(
+            &package_root.join("tests").join("smoke-test.json"),
+            r#"{
+  "name": "script-backed-smoke",
+  "input": "doc-a.pdf",
+  "expects": ["summary"],
+  "script": "scripts/run.sh"
+}
+"#,
+        )
+        .expect("write script-backed smoke test");
+
+        let report =
+            run_package_test("pkg-pdf", Some(root.to_string_lossy().as_ref())).expect("report");
+
+        assert_eq!(report.status, PackageTestStatus::Passed);
+        assert!(report.files[0]
+            .checks
+            .iter()
+            .any(|item| item.description.contains("scripts/run.sh") && item.passed));
+        std::fs::remove_dir_all(root).ok();
     }
 }

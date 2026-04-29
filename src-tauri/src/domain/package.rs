@@ -85,6 +85,15 @@ pub struct CreatePackageFromSourcesRequest {
     pub context: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePackageFromUrlRequest {
+    pub project_root_id: String,
+    pub url: String,
+    pub prompt: Option<String>,
+    pub context: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PackageUpdateRequest {
@@ -165,4 +174,13 @@ pub struct PackageFileContent {
     pub path: String,
     pub content: String,
     pub encoding: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageExportArtifact {
+    pub package_id: String,
+    pub zip_path: String,
+    pub size_bytes: u64,
+    pub created_at: String,
 }

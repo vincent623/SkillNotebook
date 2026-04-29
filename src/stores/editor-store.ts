@@ -25,6 +25,7 @@ interface EditorStore {
   setMode: (mode: EditorMode) => void;
   setFileContent: (content: string) => void;
   saveFile: (packageId: string) => Promise<boolean>;
+  refreshOpenFile: (packageId: string) => Promise<void>;
   setViewingVersionId: (versionId: string | null) => void;
   reset: () => void;
 }
@@ -119,6 +120,29 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         saveError: error instanceof Error ? error.message : "保存失败。",
       });
       return false;
+    }
+  },
+
+  refreshOpenFile: async (packageId) => {
+    const { currentFilePath, isDirty, isFileLoading, isSaving } = get();
+    if (!currentFilePath || isDirty || isFileLoading || isSaving) return;
+
+    try {
+      const file = await readPackageFile(packageId, currentFilePath);
+      set((state) => {
+        if (state.currentFilePath !== currentFilePath || state.isDirty) {
+          return {};
+        }
+        return {
+          fileContent: file.content,
+          originalContent: file.content,
+          fileError: null,
+        };
+      });
+    } catch (error) {
+      set({
+        fileError: error instanceof Error ? error.message : "文件刷新失败。",
+      });
     }
   },
 

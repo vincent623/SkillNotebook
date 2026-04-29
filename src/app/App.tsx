@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { CommandPalette } from "../components/command/CommandPalette";
 import { ExportUseModal } from "../components/export/ExportUseModal";
 import { VersionPanel } from "../components/notebook/VersionPanel";
@@ -6,8 +6,9 @@ import { WorkbenchView } from "./views/WorkbenchView";
 import { CreateView } from "./views/CreateView";
 import { SettingsPage } from "./routes/SettingsPage";
 import { useUiStore } from "../stores/ui-store";
+import { useEditorStore } from "../stores/editor-store";
 import { useProjectStore } from "../stores/project-store";
-import type { EvalReport, SkillPackage } from "../types/models";
+import type { AppScreen, EvalReport, SkillPackage } from "../types/models";
 
 function SearchIcon() {
   return (
@@ -42,6 +43,15 @@ function DownloadIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M8 2v8M4 7l4 4 4-4M3 13h10" />
+    </svg>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="2.3" />
+      <path d="M8 1.8v2M8 12.2v2M3.6 3.6 5 5M11 11l1.4 1.4M1.8 8h2M12.2 8h2M3.6 12.4 5 11M11 5l1.4-1.4" />
     </svg>
   );
 }
@@ -88,8 +98,54 @@ function selectedQuality(pkg: SkillPackage | null, report?: EvalReport) {
   return { tone: "warn", label: "1" };
 }
 
+function DirtyNavigationModal({
+  isSaving,
+  onCancel,
+  onDiscard,
+  onSave,
+}: {
+  isSaving: boolean;
+  onCancel: () => void;
+  onDiscard: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="version-modal-overlay" onClick={onCancel} role="presentation">
+      <div
+        aria-labelledby="dirty-nav-title"
+        aria-modal="true"
+        className="version-modal version-action-modal dirty-switch-modal"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <div className="version-modal-header">
+          <div>
+            <span className="version-modal-eyebrow is-danger">Unsaved</span>
+            <h3 id="dirty-nav-title">当前文件还没保存</h3>
+            <p className="muted version-modal-subtitle">离开工作台前，请先处理这份修改。</p>
+          </div>
+          <button className="button-secondary version-modal-close" onClick={onCancel} type="button">
+            关闭
+          </button>
+        </div>
+        <div className="version-modal-body version-action-body">
+          <div className="version-restore-warning">离开工作台会重新装载当前文件。保存后继续，或放弃这次修改。</div>
+        </div>
+        <div className="version-modal-footer">
+          <button className="button-secondary" disabled={isSaving} onClick={onCancel} type="button">取消</button>
+          <button className="button-secondary" disabled={isSaving} onClick={onDiscard} type="button">放弃修改</button>
+          <button className="button-primary" disabled={isSaving} onClick={onSave} type="button">
+            {isSaving ? "保存中..." : "保存并继续"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [exportOpen, setExportOpen] = useState(false);
+  const [pendingScreen, setPendingScreen] = useState<AppScreen | null>(null);
   const currentScreen = useUiStore((state) => state.currentScreen);
   const setCurrentScreen = useUiStore((state) => state.setCurrentScreen);
   const openCommandPalette = useUiStore((state) => state.openCommandPalette);
@@ -97,12 +153,60 @@ export default function App() {
   const openVersionPanel = useUiStore((state) => state.openVersionPanel);
   const closeVersionPanel = useUiStore((state) => state.closeVersionPanel);
   const bootstrap = useProjectStore((state) => state.bootstrap);
+  const status = useProjectStore((state) => state.status);
   const selectedPackageId = useProjectStore((state) => state.selectedPackageId);
   const loadBootstrap = useProjectStore((state) => state.loadBootstrap);
+  const refreshBootstrap = useProjectStore((state) => state.refreshBootstrap);
+  const isDirty = useEditorStore((state) => state.isDirty);
+  const isSaving = useEditorStore((state) => state.isSaving);
+  const saveFile = useEditorStore((state) => state.saveFile);
+  const loadFileTree = useEditorStore((state) => state.loadFileTree);
+  const refreshOpenFile = useEditorStore((state) => state.refreshOpenFile);
 
   useEffect(() => {
     void loadBootstrap();
   }, [loadBootstrap]);
+
+  useEffect(() => {
+    if (currentScreen !== "explorer" && currentScreen !== "notebook") return undefined;
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== "visible" || isDirty) return;
+      void refreshBootstrap(selectedPackageId);
+      if (selectedPackageId) {
+        void loadFileTree(selectedPackageId);
+        void refreshOpenFile(selectedPackageId);
+      }
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [currentScreen, isDirty, loadFileTree, refreshBootstrap, refreshOpenFile, selectedPackageId]);
+
+  const requestScreen = useCallback((screen: AppScreen) => {
+    if (
+      isDirty &&
+      selectedPackageId &&
+      (currentScreen === "explorer" || currentScreen === "notebook") &&
+      screen !== currentScreen
+    ) {
+      setPendingScreen(screen);
+      return;
+    }
+    setCurrentScreen(screen);
+  }, [currentScreen, isDirty, selectedPackageId, setCurrentScreen]);
+
+  const continueToPendingScreen = useCallback(() => {
+    if (!pendingScreen) return;
+    setCurrentScreen(pendingScreen);
+    setPendingScreen(null);
+  }, [pendingScreen, setCurrentScreen]);
+
+  const saveAndContinueToPendingScreen = useCallback(async () => {
+    if (!pendingScreen || !selectedPackageId) return;
+    const saved = await saveFile(selectedPackageId);
+    if (!saved) return;
+    continueToPendingScreen();
+  }, [continueToPendingScreen, pendingScreen, saveFile, selectedPackageId]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -112,7 +216,11 @@ export default function App() {
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
-        setCurrentScreen("create");
+        if (isDirty && selectedPackageId && (currentScreen === "explorer" || currentScreen === "notebook")) {
+          setPendingScreen("create");
+        } else {
+          setCurrentScreen("create");
+        }
       }
       if (event.key === "Escape") {
         closeVersionPanel();
@@ -121,7 +229,7 @@ export default function App() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [closeVersionPanel, openCommandPalette, setCurrentScreen]);
+  }, [closeVersionPanel, currentScreen, isDirty, openCommandPalette, selectedPackageId, setCurrentScreen]);
 
   const selectedPackage = useMemo(
     () => bootstrap?.packages.find((item) => item.id === selectedPackageId) ?? bootstrap?.packages[0] ?? null,
@@ -139,6 +247,8 @@ export default function App() {
     [bootstrap?.versions, selectedPackage?.id],
   );
   const quality = selectedQuality(selectedPackage, selectedEvalReport);
+  const projectRootPath = bootstrap?.projectRoot.rootPath ?? "尚未加载项目根目录";
+  const statusLabel = status === "loading" ? "加载中" : status === "error" ? "错误" : status === "ready" ? "就绪" : "待机";
 
   return (
     <div className="app-shell">
@@ -146,12 +256,19 @@ export default function App() {
         <div className="topbar-left">
           <button
             className="topbar-brand"
-            onClick={() => setCurrentScreen("explorer")}
+            onClick={() => requestScreen("explorer")}
             type="button"
           >
             <span className="topbar-brand-mark">技</span>
             <span>技能本</span>
           </button>
+          <div className="topbar-project" title={projectRootPath}>
+            <span>
+              <i className={`status-led status-led-${status}`} />
+              {statusLabel}
+            </span>
+            <strong>{projectRootPath}</strong>
+          </div>
           {selectedPackage ? (
             <div className="topbar-breadcrumb" title={selectedPackage.rootPath}>
               <span>›</span>
@@ -178,7 +295,7 @@ export default function App() {
           </button>
           <button
             className="topbar-create"
-            onClick={() => setCurrentScreen("create")}
+            onClick={() => requestScreen("create")}
             type="button"
           >
             <WandIcon />
@@ -201,6 +318,14 @@ export default function App() {
           >
             <DownloadIcon />
             导出
+          </button>
+          <button
+            className={`topbar-icon-button ${currentScreen === "settings" ? "is-active" : ""}`}
+            onClick={() => requestScreen("settings")}
+            title="设置"
+            type="button"
+          >
+            <GearIcon />
           </button>
           <button className="topbar-icon-button" disabled title="删除" type="button">
             <TrashIcon />
@@ -247,6 +372,14 @@ export default function App() {
             </div>
           </section>
         </div>
+      ) : null}
+      {pendingScreen ? (
+        <DirtyNavigationModal
+          isSaving={isSaving}
+          onCancel={() => setPendingScreen(null)}
+          onDiscard={continueToPendingScreen}
+          onSave={() => { void saveAndContinueToPendingScreen(); }}
+        />
       ) : null}
     </div>
   );

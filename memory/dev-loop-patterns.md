@@ -209,3 +209,23 @@
 
 - After `tauri build`, generated JavaScript assets can appear under `src-tauri/target/...` and break ESLint parsing even though they are build outputs.
 - Keep frontend lint ignores aligned with Git ignores for `dist`, root `target`, and `src-tauri/target` so post-package validation stays repeatable.
+
+### Spec Gaps Should Close As Real Workflows, Not Labels
+
+- When a spec gap names a capability, close it at the command/service/API/UI boundary where users actually exercise it.
+- For Skill Notebook, URL create needed preview generation and source traceability, script tests needed a package-local execution boundary, and native export needed a real artifact path, not only explanatory UI copy.
+
+### Dirty Editors Need A Product-Level Gate
+
+- File switches, package switches, and top-level navigation all need to respect the same dirty editor state.
+- Prefer a three-way decision (`save and continue`, `discard`, `cancel`) for primary workbench navigation; command-palette shortcuts can use a lighter guard, but must never silently drop content.
+
+### Watch Refresh Should Not Fight Active Editing
+
+- Auto-refreshing filesystem state is useful for local-first apps, but it must pause while the editor is dirty or saving.
+- Polling refresh is acceptable for V1 if it refreshes bootstrap, file tree, and the open file only when the open editor is clean; true native watchers can replace the polling seam later.
+
+### Native Export Should Be Sanitized By Default
+
+- Export artifacts should exclude internal notebook metadata and hidden files unless the product explicitly offers a diagnostic export.
+- Put generated archives under the active project root, so users can inspect and share the artifact without guessing where the app wrote it.

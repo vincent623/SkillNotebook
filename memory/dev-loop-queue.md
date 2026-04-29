@@ -16,9 +16,9 @@
 - [x] Replace `package_update` scaffold with real package metadata updates.
 - [x] Remove unused placeholder SQLite/repository/watcher/shell modules from V1 code.
 - [x] Decide SQLite is optional future architecture, not checked-in V1 placeholder code.
-- [ ] Add URL-based package generation.
-- [ ] Add shell/script-backed package test execution behind an explicit safety boundary.
-- [ ] Add filesystem watch refresh.
+- [x] Add URL-based package generation.
+- [x] Add shell/script-backed package test execution behind an explicit safety boundary.
+- [x] Add filesystem watch refresh.
 
 ## Completed In This Round
 
@@ -37,3 +37,4 @@
 - [x] Ship preview TTL cleanup for crash/force-quit orphan workspaces.
 - [x] Ship file/directory-based package generation with source inventory traceability.
 - [x] Ship real `package_update` metadata persistence and clean unused placeholder modules.
+- [x] Close spec gaps for project-root/settings alignment, dirty editor switching, library eval/status density, metadata editing, URL create, script-backed tests, native sanitized export, and clean-editor filesystem refresh.
