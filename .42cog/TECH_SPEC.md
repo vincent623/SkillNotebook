@@ -134,6 +134,9 @@ src-tauri/src/
   - `SKILL_NOTEBOOK_PI_NODE_BIN` and `SKILL_NOTEBOOK_PI_SIDECAR_SCRIPT` override Node/script resolution
   - `SKILL_NOTEBOOK_AGENT_TIMEOUT_SECS` and `SKILL_NOTEBOOK_AGENT_RETRY_ATTEMPTS` control model-call tolerance
   - GUI creation is a management surface over the same Rust/CLI generation path; it must not introduce a separate fake generator
+  - GUI Settings persists the same agent runtime fields to `~/Library/Application Support/Skill Notebook/settings.json`
+  - environment variables override GUI-saved config so one-off CLI sessions remain scriptable
+  - API keys are write-only from the UI perspective: Settings reports configured/not configured, not the secret value
 - Claude CLI generation retries transient 429/rate-limit/overload failures before surfacing an error:
   - `SKILL_NOTEBOOK_CLAUDE_RETRY_ATTEMPTS` controls total attempts
   - `SKILL_NOTEBOOK_CLAUDE_RETRY_BACKOFF_SECS` controls exponential base backoff

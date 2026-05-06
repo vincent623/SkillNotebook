@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::{Duration as TimeDuration, OffsetDateTime};
 
+use crate::config::app_config;
 use crate::domain::package::{
     CommitPackagePreviewRequest, CreatePackageFromNlRequest, CreatePackageFromNlResponse,
     CreatePackageFromSourcesRequest, CreatePackageFromUrlRequest, CreatePackagePreviewResponse,
@@ -281,8 +282,10 @@ pub fn creator_bridge_status() -> serde_json::Value {
         "piSidecarConfigured": pi_sidecar_configured,
         "piNodeBinary": options.pi_node_bin,
         "piNodeResolvedPath": pi_node_path.map(|path| path.to_string_lossy().to_string()),
+        "piSidecarScript": options.pi_sidecar_script,
         "piSidecarScriptPath": pi_sidecar_script_path.map(|path| path.to_string_lossy().to_string()),
         "agentProvider": options.agent_provider,
+        "agentBaseUrl": options.agent_base_url,
         "agentBaseUrlConfigured": options.agent_base_url.is_some(),
         "agentApiKeyConfigured": options.agent_api_key.is_some(),
         "agentModel": options.agent_model,
@@ -302,9 +305,12 @@ pub fn creator_bridge_status() -> serde_json::Value {
 }
 
 fn resolve_creator_bridge_options() -> CreatorBridgeOptions {
-    let mode = match env::var("SKILL_NOTEBOOK_GENERATOR_RUNTIME")
-        .or_else(|_| env::var("SKILL_NOTEBOOK_CREATOR_MODE"))
-        .unwrap_or_else(|_| "auto".to_string())
+    let app_config = app_config::load_app_config();
+    let agent_runtime = app_config.agent_runtime;
+    let mode = match env_string("SKILL_NOTEBOOK_GENERATOR_RUNTIME")
+        .or_else(|| env_string("SKILL_NOTEBOOK_CREATOR_MODE"))
+        .or(agent_runtime.mode.clone())
+        .unwrap_or_else(|| "auto".to_string())
         .to_lowercase()
         .as_str()
     {
@@ -317,66 +323,55 @@ fn resolve_creator_bridge_options() -> CreatorBridgeOptions {
 
     CreatorBridgeOptions {
         mode,
-        skill_create_bin: env::var("SKILL_NOTEBOOK_SKILL_CREATE_BIN")
-            .unwrap_or_else(|_| DEFAULT_SKILL_CREATE_BINARY.to_string()),
-        skill_create_timeout_secs: env::var("SKILL_NOTEBOOK_SKILL_CREATE_TIMEOUT_SECS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
+        skill_create_bin: env_string("SKILL_NOTEBOOK_SKILL_CREATE_BIN")
+            .unwrap_or_else(|| DEFAULT_SKILL_CREATE_BINARY.to_string()),
+        skill_create_timeout_secs: env_u64("SKILL_NOTEBOOK_SKILL_CREATE_TIMEOUT_SECS")
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_SKILL_CREATE_TIMEOUT_SECS),
-        claude_bin: env::var("SKILL_NOTEBOOK_CLAUDE_BIN")
-            .unwrap_or_else(|_| DEFAULT_CLAUDE_BINARY.to_string()),
-        claude_model: env::var("SKILL_NOTEBOOK_CLAUDE_MODEL")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        claude_timeout_secs: env::var("SKILL_NOTEBOOK_CLAUDE_TIMEOUT_SECS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
+        claude_bin: env_string("SKILL_NOTEBOOK_CLAUDE_BIN")
+            .unwrap_or_else(|| DEFAULT_CLAUDE_BINARY.to_string()),
+        claude_model: env_string("SKILL_NOTEBOOK_CLAUDE_MODEL"),
+        claude_timeout_secs: env_u64("SKILL_NOTEBOOK_CLAUDE_TIMEOUT_SECS")
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_CLAUDE_TIMEOUT_SECS),
-        claude_retry_attempts: env::var("SKILL_NOTEBOOK_CLAUDE_RETRY_ATTEMPTS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
+        claude_retry_attempts: env_u64("SKILL_NOTEBOOK_CLAUDE_RETRY_ATTEMPTS")
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_CLAUDE_RETRY_ATTEMPTS),
-        claude_retry_backoff_secs: env::var("SKILL_NOTEBOOK_CLAUDE_RETRY_BACKOFF_SECS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
+        claude_retry_backoff_secs: env_u64("SKILL_NOTEBOOK_CLAUDE_RETRY_BACKOFF_SECS")
             .unwrap_or(DEFAULT_CLAUDE_RETRY_BACKOFF_SECS),
-        pi_node_bin: env::var("SKILL_NOTEBOOK_PI_NODE_BIN")
-            .unwrap_or_else(|_| DEFAULT_PI_NODE_BINARY.to_string()),
-        pi_sidecar_script: env::var("SKILL_NOTEBOOK_PI_SIDECAR_SCRIPT")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        agent_provider: env::var("SKILL_NOTEBOOK_AGENT_PROVIDER")
-            .unwrap_or_else(|_| "openai-compatible".to_string())
+        pi_node_bin: env_string("SKILL_NOTEBOOK_PI_NODE_BIN")
+            .or(agent_runtime.node_binary)
+            .unwrap_or_else(|| DEFAULT_PI_NODE_BINARY.to_string()),
+        pi_sidecar_script: env_string("SKILL_NOTEBOOK_PI_SIDECAR_SCRIPT")
+            .or(agent_runtime.sidecar_script),
+        agent_provider: env_string("SKILL_NOTEBOOK_AGENT_PROVIDER")
+            .or(agent_runtime.provider)
+            .unwrap_or_else(|| "openai-compatible".to_string())
             .trim()
             .to_string(),
-        agent_base_url: env::var("SKILL_NOTEBOOK_AGENT_BASE_URL")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        agent_api_key: env::var("SKILL_NOTEBOOK_AGENT_API_KEY")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        agent_model: env::var("SKILL_NOTEBOOK_AGENT_MODEL")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-        agent_timeout_secs: env::var("SKILL_NOTEBOOK_AGENT_TIMEOUT_SECS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
+        agent_base_url: env_string("SKILL_NOTEBOOK_AGENT_BASE_URL").or(agent_runtime.base_url),
+        agent_api_key: env_string("SKILL_NOTEBOOK_AGENT_API_KEY").or(agent_runtime.api_key),
+        agent_model: env_string("SKILL_NOTEBOOK_AGENT_MODEL").or(agent_runtime.model),
+        agent_timeout_secs: env_u64("SKILL_NOTEBOOK_AGENT_TIMEOUT_SECS")
+            .or(agent_runtime.timeout_secs)
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_AGENT_TIMEOUT_SECS),
-        agent_retry_attempts: env::var("SKILL_NOTEBOOK_AGENT_RETRY_ATTEMPTS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
+        agent_retry_attempts: env_u64("SKILL_NOTEBOOK_AGENT_RETRY_ATTEMPTS")
+            .or(agent_runtime.retry_attempts)
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_AGENT_RETRY_ATTEMPTS),
     }
+}
+
+fn env_string(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn env_u64(key: &str) -> Option<u64> {
+    env_string(key).and_then(|value| value.parse::<u64>().ok())
 }
 
 fn create_package_in_workspace_with_options(

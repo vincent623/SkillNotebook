@@ -266,3 +266,13 @@
 | Fake-success guard | preserved | A configured pi sidecar failure is surfaced and does not silently become a local template draft. |
 | Provider transport | streaming + fallback | Local OpenAI-compatible mock tests pass for pi-ai streaming SSE and non-streaming `/chat/completions` fallback. |
 | Validation | green | `cargo test` passes with 43 tests; `npm run lint`, `npm run build`, `git diff --check`, mock pi CLI E2E, Tauri build, strict codesign, bundled CLI `--version`, and bundled sidecar resource resolution pass. |
+
+### V0.4.0 GUI Agent Runtime Config
+
+| Metric | Value | Notes |
+| --- | --- | --- |
+| Settings form | implemented | GUI can edit runtime mode, provider, base URL, model, API key, Node binary, sidecar override, timeout, and retries. |
+| Persistence | implemented | Settings save to `~/Library/Application Support/Skill Notebook/settings.json` with owner-only permissions on macOS. |
+| Secret handling | write-only UI | API key can be saved or cleared; Settings reports configured/not configured without returning the secret. |
+| CLI compatibility | preserved | Environment variables override GUI-saved config, and `skill doctor generator` reads persisted config when env vars are absent. |
+| Validation | green | `cargo test` passes with 43 tests; `npm run lint`, `npm run build`, `git diff --check`, settings-file `skill doctor generator`, Tauri build, strict codesign, bundled CLI `--version`, and bundled sidecar resolution all pass. |

@@ -334,6 +334,7 @@ Required:
 - Open/switch project root.
 - Recent project roots.
 - Skill root name: `.skills`.
+- Agent Runtime configuration: editable runtime mode, provider, base URL, model, write-only API key, Node binary, optional sidecar script, timeout, retry attempts.
 - Creation bridge status: mode, preferred generator, `pi_sidecar` configured/available state, agent provider/model, Node/sidecar paths, `skill-create` availability, Claude CLI availability.
 
 Optional:

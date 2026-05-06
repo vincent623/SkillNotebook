@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createProjectRoot, getSettings, openProjectRoot } from "../../services/tauri-api";
+import { createProjectRoot, getSettings, openProjectRoot, updateSettings } from "../../services/tauri-api";
 import { BackButton } from "../../components/common/BackButton";
 import { useProjectStore } from "../../stores/project-store";
 import type { AppSettings } from "../../types/models";
@@ -14,6 +14,18 @@ export function SettingsPage() {
   const [isSwitching, setIsSwitching] = useState(false);
   const [newProjectRootName, setNewProjectRootName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const [runtimeMode, setRuntimeMode] = useState("auto");
+  const [agentProvider, setAgentProvider] = useState("openai-compatible");
+  const [agentBaseUrl, setAgentBaseUrl] = useState("");
+  const [agentApiKey, setAgentApiKey] = useState("");
+  const [agentModel, setAgentModel] = useState("");
+  const [agentNodeBinary, setAgentNodeBinary] = useState("node");
+  const [agentSidecarScript, setAgentSidecarScript] = useState("");
+  const [agentTimeoutSecs, setAgentTimeoutSecs] = useState("300");
+  const [agentRetryAttempts, setAgentRetryAttempts] = useState("3");
+  const [agentConfigError, setAgentConfigError] = useState<string | null>(null);
+  const [agentConfigSuccess, setAgentConfigSuccess] = useState<string | null>(null);
+  const [isSavingAgentConfig, setIsSavingAgentConfig] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -22,6 +34,7 @@ export function SettingsPage() {
         const next = await getSettings();
         if (cancelled) return;
         setSettings(next);
+        populateAgentForm(next);
         setWorkspacePath(next.currentProjectRoot || (bootstrap?.projectRoot.rootPath ?? ""));
       } catch (error) {
         if (!cancelled) setWorkspaceError(error instanceof Error ? error.message : "加载设置失败");
@@ -30,6 +43,19 @@ export function SettingsPage() {
     void load();
     return () => { cancelled = true; };
   }, [bootstrap?.projectRoot.rootPath]);
+
+  function populateAgentForm(next: AppSettings) {
+    const bridge = next.creationBridge;
+    setRuntimeMode(bridge.mode || "auto");
+    setAgentProvider(bridge.agentProvider || "openai-compatible");
+    setAgentBaseUrl(bridge.agentBaseUrl ?? "");
+    setAgentApiKey("");
+    setAgentModel(bridge.agentModel ?? "");
+    setAgentNodeBinary(bridge.piNodeBinary || "node");
+    setAgentSidecarScript(bridge.piSidecarScript ?? "");
+    setAgentTimeoutSecs(String(bridge.agentTimeoutSecs || 300));
+    setAgentRetryAttempts(String(bridge.agentRetryAttempts || 3));
+  }
 
   async function switchProjectRoot(path: string) {
     setIsSwitching(true);
@@ -40,6 +66,7 @@ export function SettingsPage() {
       await loadBootstrap();
       const next = await getSettings();
       setSettings(next);
+      populateAgentForm(next);
       setWorkspacePath(projectRoot.rootPath);
       setWorkspaceSuccess(`已切换到 ${projectRoot.rootPath}`);
     } catch (error) {
@@ -60,6 +87,7 @@ export function SettingsPage() {
       await loadBootstrap();
       const next = await getSettings();
       setSettings(next);
+      populateAgentForm(next);
       setWorkspacePath(projectRoot.rootPath);
       setNewProjectRootName("");
       setWorkspaceSuccess(`已创建并打开 ${projectRoot.rootPath}`);
@@ -67,6 +95,46 @@ export function SettingsPage() {
       setWorkspaceError(error instanceof Error ? error.message : "创建失败");
     } finally {
       setIsCreating(false);
+    }
+  }
+
+  async function saveAgentRuntimeConfig(clearApiKey = false) {
+    setIsSavingAgentConfig(true);
+    setAgentConfigError(null);
+    setAgentConfigSuccess(null);
+    try {
+      const timeoutSecs = Number.parseInt(agentTimeoutSecs, 10);
+      const retryAttempts = Number.parseInt(agentRetryAttempts, 10);
+      if (!Number.isFinite(timeoutSecs) || timeoutSecs <= 0) {
+        throw new Error("Agent 超时必须是大于 0 的秒数。");
+      }
+      if (!Number.isFinite(retryAttempts) || retryAttempts <= 0) {
+        throw new Error("Agent 重试次数必须大于 0。");
+      }
+
+      const apiKey = agentApiKey.trim();
+      const payload = {
+        agentRuntime: {
+          mode: runtimeMode,
+          provider: agentProvider,
+          baseUrl: agentBaseUrl,
+          model: agentModel,
+          nodeBinary: agentNodeBinary,
+          sidecarScript: agentSidecarScript,
+          timeoutSecs,
+          retryAttempts,
+          clearApiKey,
+          ...(apiKey ? { apiKey } : {}),
+        },
+      };
+      const next = await updateSettings(payload);
+      setSettings(next);
+      populateAgentForm(next);
+      setAgentConfigSuccess(clearApiKey ? "Agent API key 已清除。" : "Agent runtime 配置已保存并刷新。");
+    } catch (error) {
+      setAgentConfigError(error instanceof Error ? error.message : "保存 Agent runtime 配置失败");
+    } finally {
+      setIsSavingAgentConfig(false);
     }
   }
 
@@ -149,7 +217,130 @@ export function SettingsPage() {
         </div>
 
         <div className="content-card">
-          <h3>创建桥接</h3>
+          <h3>Agent Runtime 配置</h3>
+          {settings ? (
+            <>
+              <div className="agent-config-grid" style={{ marginTop: 12 }}>
+                <label className="field-stack">
+                  <span className="field-label">运行时</span>
+                  <select
+                    className="detail-save-input"
+                    onChange={(e) => setRuntimeMode(e.target.value)}
+                    value={runtimeMode}
+                  >
+                    <option value="auto">auto</option>
+                    <option value="pi_sidecar">pi_sidecar</option>
+                    <option value="skill_create">skill_create</option>
+                    <option value="claude_cli">claude_cli</option>
+                    <option value="template">template</option>
+                  </select>
+                </label>
+                <label className="field-stack">
+                  <span className="field-label">Provider</span>
+                  <input
+                    className="detail-save-input"
+                    onChange={(e) => setAgentProvider(e.target.value)}
+                    placeholder="openai-compatible"
+                    value={agentProvider}
+                  />
+                </label>
+                <label className="field-stack agent-config-wide">
+                  <span className="field-label">Base URL</span>
+                  <input
+                    className="detail-save-input"
+                    onChange={(e) => setAgentBaseUrl(e.target.value)}
+                    placeholder="https://api.example.com/v1"
+                    value={agentBaseUrl}
+                  />
+                </label>
+                <label className="field-stack">
+                  <span className="field-label">Model</span>
+                  <input
+                    className="detail-save-input"
+                    onChange={(e) => setAgentModel(e.target.value)}
+                    placeholder="model-id"
+                    value={agentModel}
+                  />
+                </label>
+                <label className="field-stack">
+                  <span className="field-label">API Key</span>
+                  <input
+                    autoComplete="off"
+                    className="detail-save-input"
+                    onChange={(e) => setAgentApiKey(e.target.value)}
+                    placeholder={settings.creationBridge.agentApiKeyConfigured ? "已保存；留空则保留" : "粘贴 API key"}
+                    type="password"
+                    value={agentApiKey}
+                  />
+                </label>
+                <label className="field-stack">
+                  <span className="field-label">Node binary</span>
+                  <input
+                    className="detail-save-input"
+                    onChange={(e) => setAgentNodeBinary(e.target.value)}
+                    placeholder="node"
+                    value={agentNodeBinary}
+                  />
+                </label>
+                <label className="field-stack">
+                  <span className="field-label">Sidecar script</span>
+                  <input
+                    className="detail-save-input"
+                    onChange={(e) => setAgentSidecarScript(e.target.value)}
+                    placeholder="留空使用内置 sidecar"
+                    value={agentSidecarScript}
+                  />
+                </label>
+                <label className="field-stack">
+                  <span className="field-label">Timeout seconds</span>
+                  <input
+                    className="detail-save-input"
+                    inputMode="numeric"
+                    onChange={(e) => setAgentTimeoutSecs(e.target.value)}
+                    value={agentTimeoutSecs}
+                  />
+                </label>
+                <label className="field-stack">
+                  <span className="field-label">Retry attempts</span>
+                  <input
+                    className="detail-save-input"
+                    inputMode="numeric"
+                    onChange={(e) => setAgentRetryAttempts(e.target.value)}
+                    value={agentRetryAttempts}
+                  />
+                </label>
+              </div>
+              <p className="muted" style={{ marginTop: 8 }}>
+                保存到 <span className="mono-text">{settings.settingsPath ?? "本机设置文件"}</span>。环境变量仍会覆盖这里的配置。
+              </p>
+              <div className="settings-action-row">
+                <button
+                  className="button-primary"
+                  disabled={isSavingAgentConfig}
+                  onClick={() => { void saveAgentRuntimeConfig(false); }}
+                  type="button"
+                >
+                  {isSavingAgentConfig ? "保存中..." : "保存并检查"}
+                </button>
+                <button
+                  className="button-secondary"
+                  disabled={isSavingAgentConfig || !settings.creationBridge.agentApiKeyConfigured}
+                  onClick={() => { void saveAgentRuntimeConfig(true); }}
+                  type="button"
+                >
+                  清除 API key
+                </button>
+              </div>
+              {agentConfigSuccess ? <div className="inline-banner inline-banner-success">{agentConfigSuccess}</div> : null}
+              {agentConfigError ? <div className="inline-banner inline-banner-error">{agentConfigError}</div> : null}
+            </>
+          ) : (
+            <p className="muted" style={{ marginTop: 8 }}>正在读取 Agent runtime 配置...</p>
+          )}
+        </div>
+
+        <div className="content-card">
+          <h3>创建桥接状态</h3>
           {settings ? (
             <dl className="settings-bridge-grid" style={{ marginTop: 12 }}>
               <div>

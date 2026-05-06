@@ -167,8 +167,10 @@ export interface CreationBridgeStatus {
   piSidecarConfigured: boolean;
   piNodeBinary: string;
   piNodeResolvedPath?: string | null;
+  piSidecarScript?: string | null;
   piSidecarScriptPath?: string | null;
   agentProvider: string;
+  agentBaseUrl?: string | null;
   agentBaseUrlConfigured: boolean;
   agentApiKeyConfigured: boolean;
   agentModel?: string | null;
@@ -194,8 +196,26 @@ export interface AppSettings {
   skillRootName?: string;
   defaultProjectRoot: string;
   currentProjectRoot: string;
+  settingsPath?: string | null;
   recentProjectRoots: ProjectRoot[];
   creationBridge: CreationBridgeStatus;
+}
+
+export interface AgentRuntimeSettingsPayload {
+  mode?: string | null;
+  provider?: string | null;
+  baseUrl?: string | null;
+  apiKey?: string | null;
+  clearApiKey?: boolean;
+  model?: string | null;
+  nodeBinary?: string | null;
+  sidecarScript?: string | null;
+  timeoutSecs?: number | null;
+  retryAttempts?: number | null;
+}
+
+export interface SettingsUpdatePayload {
+  agentRuntime?: AgentRuntimeSettingsPayload;
 }
 
 export interface CreatePackageFromNlRequest {

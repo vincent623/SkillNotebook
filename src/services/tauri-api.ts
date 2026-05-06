@@ -19,6 +19,7 @@ import type {
   PackageUpdateRequest,
   PackageVersionDiff,
   PackageVersion,
+  SettingsUpdatePayload,
   SkillPackage,
   ProjectRoot,
 } from "../types/models";
@@ -237,6 +238,7 @@ function cloneSettings(): AppSettings {
     skillRootName: ".skills",
     defaultProjectRoot: demoBootstrap.projectRoot.rootPath,
     currentProjectRoot: demoBootstrap.projectRoot.rootPath,
+    settingsPath: null,
     recentProjectRoots: [demoBootstrap.projectRoot],
     creationBridge: {
       mode: "auto",
@@ -245,8 +247,10 @@ function cloneSettings(): AppSettings {
       piSidecarConfigured: false,
       piNodeBinary: "node",
       piNodeResolvedPath: null,
+      piSidecarScript: null,
       piSidecarScriptPath: null,
       agentProvider: "openai-compatible",
+      agentBaseUrl: null,
       agentBaseUrlConfigured: false,
       agentApiKeyConfigured: false,
       agentModel: null,
@@ -1081,6 +1085,32 @@ export async function getSettings(): Promise<AppSettings> {
   }
 
   return cloneSettings();
+}
+
+export async function updateSettings(payload: SettingsUpdatePayload): Promise<AppSettings> {
+  if (!hasTauriRuntime()) {
+    const next = cloneSettings();
+    if (payload.agentRuntime) {
+      next.creationBridge.mode = payload.agentRuntime.mode ?? next.creationBridge.mode;
+      next.creationBridge.agentProvider = payload.agentRuntime.provider ?? next.creationBridge.agentProvider;
+      next.creationBridge.agentBaseUrl = payload.agentRuntime.baseUrl ?? null;
+      next.creationBridge.agentBaseUrlConfigured = Boolean(payload.agentRuntime.baseUrl);
+      next.creationBridge.agentApiKeyConfigured = Boolean(payload.agentRuntime.apiKey) && !payload.agentRuntime.clearApiKey;
+      next.creationBridge.agentModel = payload.agentRuntime.model ?? null;
+      next.creationBridge.piNodeBinary = payload.agentRuntime.nodeBinary ?? next.creationBridge.piNodeBinary;
+      next.creationBridge.piSidecarScript = payload.agentRuntime.sidecarScript ?? null;
+      next.creationBridge.agentTimeoutSecs = payload.agentRuntime.timeoutSecs ?? next.creationBridge.agentTimeoutSecs;
+      next.creationBridge.agentRetryAttempts = payload.agentRuntime.retryAttempts ?? next.creationBridge.agentRetryAttempts;
+    }
+    return next;
+  }
+
+  try {
+    const response = await invoke<AppEnvelope<AppSettings>>("settings_update", { payload });
+    return unwrapResponse(response);
+  } catch (error) {
+    throw wrapRuntimeError("settings update", error);
+  }
 }
 
 export async function openProjectRoot(rootPath: string): Promise<ProjectRoot> {

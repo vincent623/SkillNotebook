@@ -273,3 +273,9 @@
 - Keep the Rust CLI/core as the product contract for creation, preview, eval, commit, export, and versioning; GUI surfaces should only assist that loop.
 - Put provider-specific model calls behind a small sidecar protocol so rate limits, API compatibility, and model routing can evolve without rewriting package orchestration.
 - A generic agent runtime is complete only when CLI diagnostics, GUI settings, generated preview labels, packaged resources, and E2E tests all exercise the same path.
+
+### GUI Config Must Preserve CLI Override Semantics
+
+- GUI Settings may persist local defaults, but environment variables should remain the highest-precedence path for scripted and temporary sessions.
+- Secret fields should be write-only in the UI: accept a new API key, support clearing it, and report only configured/not configured afterward.
+- Validate saved settings through the same `doctor generator` status used by CLI users, so GUI configuration does not become a separate source of truth.

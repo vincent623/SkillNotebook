@@ -31,6 +31,28 @@ If a real generator is invoked and fails, the failure is surfaced. It must not s
 | `SKILL_NOTEBOOK_PI_NODE_BIN` | no | Node binary, defaults to `node`. |
 | `SKILL_NOTEBOOK_PI_SIDECAR_SCRIPT` | no | Explicit sidecar script path. |
 
+## GUI Configuration
+
+Settings includes an `Agent Runtime` form for the same fields:
+
+- runtime mode
+- provider
+- base URL
+- model
+- API key
+- Node binary
+- optional sidecar script override
+- timeout seconds
+- retry attempts
+
+The app persists this to:
+
+```txt
+~/Library/Application Support/Skill Notebook/settings.json
+```
+
+The file is written with owner-only permissions on macOS. API keys are not returned to the frontend after save; the UI only shows whether a key is configured. Environment variables remain the highest-precedence override for CLI and temporary sessions.
+
 ## Sidecar Protocol
 
 Rust starts:
