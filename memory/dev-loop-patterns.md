@@ -255,3 +255,9 @@
 - Do not expose only frontend-shaped nested response objects from the CLI; shell users need stable top-level IDs, paths, counts, and next commands.
 - Keep nested objects for GUI/API parity, but duplicate lifecycle handles such as `previewId`, `packageId`, `slug`, `packagePath`, and `zipPath` at the top level.
 - Validate CLI contracts with a real command chain, not only parser tests, because field-shape issues appear when commands feed each other.
+
+### Release Version Labels Need A Single Source
+
+- After a semantic version bump, verify every visible product version label, CLI `--version`, Tauri bundle name, and release artifact path against the same source.
+- Avoid hard-coded About-page versions; inject the package version at build time so browser preview and Tauri builds stay aligned.
+- Include version-label checks in acceptance because stale labels do not break tests but they break user trust.

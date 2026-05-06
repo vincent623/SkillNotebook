@@ -204,7 +204,7 @@ export function SettingsPage() {
         <div className="content-card">
           <h3>关于</h3>
           <p className="body-copy" style={{ marginTop: 8 }}>
-            Skill Notebook v0.1.0 — macOS 本地优先的 skill 仓库与版本管理工具。
+            Skill Notebook v{import.meta.env.VITE_APP_VERSION} — macOS 本地优先的 skill 仓库与版本管理工具。
           </p>
           <p className="muted" style={{ marginTop: 4 }}>
             Tauri 2 + Rust + React + TypeScript · Apple Silicon 适配

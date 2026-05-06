@@ -213,7 +213,7 @@
 | --- | --- | --- |
 | Tauri package command | green | `npm run tauri:build` completed and produced both macOS app and DMG bundles. |
 | App bundle artifact | `src-tauri/target/release/bundle/macos/Skill Notebook.app` | Release app bundle is present and launches locally. |
-| DMG artifact | `src-tauri/target/release/bundle/dmg/Skill Notebook_0.1.0_aarch64.dmg` | DMG is present after bundle regeneration. |
+| DMG artifact | `src-tauri/target/release/bundle/dmg/Skill Notebook_0.2.0_aarch64.dmg` | DMG is present after bundle regeneration. |
 | Local signing state | valid ad-hoc | Added `bundle.macOS.signingIdentity: "-"`; `codesign --verify --deep --strict --verbose=2` passes. |
 | Distribution signing state | not notarized | `spctl` rejects the ad-hoc signed app, as expected without Developer ID notarization credentials. |
 | Post-package lint scope | fixed | ESLint now ignores `target` and `src-tauri/target` so generated Tauri assets do not break `npm run lint`. |
@@ -230,3 +230,15 @@
 | Claude default timeout | 300s | Default increased from 60s for real source-material generation; override with `SKILL_NOTEBOOK_CLAUDE_TIMEOUT_SECS`. |
 | Script-ready CLI JSON | implemented | `create.preview`, `create.commit`, and `export.zip` now expose top-level lifecycle handles while keeping full nested objects. |
 | CLI-first validation | green | `skill doctor generator`, quoted local-path `skill create preview --from-file`, `skill create commit`, `skill create discard`, and `skill export zip` pass as one command chain against a temporary project root. |
+
+### V0.2.0 Full Acceptance
+
+| Metric | Value | Notes |
+| --- | --- | --- |
+| Git release baseline | `e378405` / `v0.2.0` | Code was committed before acceptance and tagged with the semantic version. |
+| Static validation | green | `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`, `cargo test --manifest-path src-tauri/Cargo.toml` (40 tests), `npm run lint`, `npm run build`, and `git diff --check` pass. |
+| Release CLI chain | green | Bundled `Skill Notebook.app/Contents/MacOS/skill` completed doctor, text preview discard, quoted local-path preview commit, URL preview discard, eval, test, and export zip against a temporary project root. |
+| Real Claude generation | green | `SKILL_NOTEBOOK_CREATOR_MODE=claude_cli` generated, committed, evaluated as usable, passed smoke test, and exported a zip. |
+| Tauri package | green | `npm run tauri:build` produced `Skill Notebook.app` and `Skill Notebook_0.2.0_aarch64.dmg`; strict `codesign --verify --deep --strict` passes. |
+| Browser GUI smoke | green | Vite preview rendered the workbench, create preview, commit, export modal, and settings page with zero console errors. Browser-only Tauri fallback warnings are expected. |
+| Acceptance drift found | fixed | Settings About text now derives from the package version instead of a hard-coded `v0.1.0`. |
