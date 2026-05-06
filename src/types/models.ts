@@ -163,6 +163,17 @@ export interface AppEnvelope<T> {
 export interface CreationBridgeStatus {
   mode: string;
   preferredGenerator: string;
+  piSidecarAvailable: boolean;
+  piSidecarConfigured: boolean;
+  piNodeBinary: string;
+  piNodeResolvedPath?: string | null;
+  piSidecarScriptPath?: string | null;
+  agentProvider: string;
+  agentBaseUrlConfigured: boolean;
+  agentApiKeyConfigured: boolean;
+  agentModel?: string | null;
+  agentTimeoutSecs: number;
+  agentRetryAttempts: number;
   claudeCliAvailable: boolean;
   skillCreateCommandAvailable: boolean;
   claudeBinary: string;

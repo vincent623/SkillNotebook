@@ -30,7 +30,7 @@ Let skills be preserved like notes, versioned like code, and reused like tools.
 ### Features
 
 1. Skill package version management
-2. Natural-language package drafting via `skill-create` (preferred), with optional Claude CLI + template fallback
+2. Natural-language package drafting via a real generator runtime, preferring configured `pi_sidecar`, then `skill-create`, with optional Claude CLI + explicit/no-generator template fallback
 3. Local eval flow
 4. Local search and retrieval
 
@@ -94,5 +94,5 @@ Three-pane layout:
 
 1. Local project shell, package list, and editor frame
 2. Filesystem-backed package loading
-3. `skill-create` (or Claude CLI) and first eval integration
+3. `pi_sidecar`, `skill-create` (or Claude CLI) and first eval integration
 4. formal version save, diff, and restore

@@ -267,3 +267,9 @@
 - Treat provider 429/rate-limit/overload responses as retryable infrastructure failures before reporting them to the user.
 - Automatic retry should preserve the "no fake template success" rule: only explicit template mode may create a structural fallback draft.
 - Surface retry attempts, timeout, and backoff in diagnostics/settings so users can distinguish local misconfiguration from provider pressure.
+
+### Agent Runtime Should Be A Replaceable Sidecar
+
+- Keep the Rust CLI/core as the product contract for creation, preview, eval, commit, export, and versioning; GUI surfaces should only assist that loop.
+- Put provider-specific model calls behind a small sidecar protocol so rate limits, API compatibility, and model routing can evolve without rewriting package orchestration.
+- A generic agent runtime is complete only when CLI diagnostics, GUI settings, generated preview labels, packaged resources, and E2E tests all exercise the same path.

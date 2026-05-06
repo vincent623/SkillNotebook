@@ -60,6 +60,13 @@ function getDefaultPreviewPath(preview: CreatePackagePreviewResponse) {
 
 function getGeneratorInfo(generatorUsed: string) {
   switch (generatorUsed) {
+    case "pi_sidecar":
+      return {
+        label: "Pi runtime",
+        tone: "native",
+        title: "由 Pi agent runtime 生成",
+        description: "已通过 pi-ai sidecar 调用自定义/OpenAI-compatible API，并把结果写入临时预览目录。",
+      };
     case "skill_create_cli":
       return {
         label: "skill-create",
@@ -79,7 +86,7 @@ function getGeneratorInfo(generatorUsed: string) {
         label: "本地模板",
         tone: "fallback",
         title: "本地模板草稿",
-        description: "本次没有调用 Claude 或 skill-create。这个草稿只适合检查结构，需要配置生成器后再生成正式内容。",
+        description: "本次没有调用 Pi runtime、skill-create 或 Claude CLI。这个草稿只适合检查结构，需要配置生成器后再生成正式内容。",
       };
     default:
       return {

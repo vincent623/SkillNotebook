@@ -20,7 +20,7 @@
 
 1. manage local skill packages
 2. index and retrieve packages locally
-3. call `skill-create` when available (with optional Claude CLI + template fallback)
+3. call a real generator runtime for draft creation, preferring `pi_sidecar` when configured, then `skill-create`, then Claude CLI, with template fallback only when no generator is available or template mode is explicit
 4. run eval and attach its result to a formal version
 5. keep at most 10 formal versions per package
 6. support preview and CLI test entry points
@@ -126,6 +126,14 @@ src-tauri/src/
   - `create.commit`: `previewId`, `packageId`, `slug`, `packagePath`, `generatorUsed`
   - `export.zip`: `packageId`, `zipPath`, `sizeBytes`
   - full nested objects remain available for GUI/API parity
+- Generator runtime policy:
+  - `SKILL_NOTEBOOK_GENERATOR_RUNTIME=auto|pi_sidecar|skill_create|claude_cli|template`
+  - `pi_sidecar` uses a bundled Node sidecar powered by `@mariozechner/pi-ai`
+  - `pi_sidecar` requires `SKILL_NOTEBOOK_AGENT_BASE_URL`, `SKILL_NOTEBOOK_AGENT_API_KEY`, and `SKILL_NOTEBOOK_AGENT_MODEL`
+  - `SKILL_NOTEBOOK_AGENT_PROVIDER` labels the provider in diagnostics and logs
+  - `SKILL_NOTEBOOK_PI_NODE_BIN` and `SKILL_NOTEBOOK_PI_SIDECAR_SCRIPT` override Node/script resolution
+  - `SKILL_NOTEBOOK_AGENT_TIMEOUT_SECS` and `SKILL_NOTEBOOK_AGENT_RETRY_ATTEMPTS` control model-call tolerance
+  - GUI creation is a management surface over the same Rust/CLI generation path; it must not introduce a separate fake generator
 - Claude CLI generation retries transient 429/rate-limit/overload failures before surfacing an error:
   - `SKILL_NOTEBOOK_CLAUDE_RETRY_ATTEMPTS` controls total attempts
   - `SKILL_NOTEBOOK_CLAUDE_RETRY_BACKOFF_SECS` controls exponential base backoff

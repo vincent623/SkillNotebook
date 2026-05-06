@@ -1,17 +1,19 @@
 {
   "name": "skill-notebook",
   "private": true,
-  "version": "0.2.1",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && npm run build:sidecars",
+    "build:sidecars": "esbuild sidecars/pi-skill-draft.mjs --bundle --platform=node --format=esm --target=node20 --outfile=dist-sidecars/pi-skill-draft.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },
   "dependencies": {
+    "@mariozechner/pi-ai": "^0.73.0",
     "@tauri-apps/api": "^2.8.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

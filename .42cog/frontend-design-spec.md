@@ -334,7 +334,7 @@ Required:
 - Open/switch project root.
 - Recent project roots.
 - Skill root name: `.skills`.
-- Creation bridge status: mode, preferred generator, `skill-create` availability, Claude CLI availability.
+- Creation bridge status: mode, preferred generator, `pi_sidecar` configured/available state, agent provider/model, Node/sidecar paths, `skill-create` availability, Claude CLI availability.
 
 Optional:
 

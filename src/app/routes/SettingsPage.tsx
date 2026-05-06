@@ -161,6 +161,48 @@ export function SettingsPage() {
                 <dd>{settings.creationBridge.preferredGenerator}</dd>
               </div>
               <div>
+                <dt>Pi runtime</dt>
+                <dd>{settings.creationBridge.piSidecarAvailable ? "可用" : settings.creationBridge.piSidecarConfigured ? "配置未就绪" : "未配置"}</dd>
+              </div>
+              <div>
+                <dt>Agent provider</dt>
+                <dd>{settings.creationBridge.agentProvider}</dd>
+              </div>
+              <div>
+                <dt>Agent model</dt>
+                <dd>{settings.creationBridge.agentModel ?? "未配置"}</dd>
+              </div>
+              <div>
+                <dt>Agent API</dt>
+                <dd>
+                  Base URL {settings.creationBridge.agentBaseUrlConfigured ? "已配置" : "未配置"} · API key {settings.creationBridge.agentApiKeyConfigured ? "已配置" : "未配置"}
+                </dd>
+              </div>
+              <div>
+                <dt>Pi Node</dt>
+                <dd>
+                  {settings.creationBridge.piNodeResolvedPath ? (
+                    <code className="settings-bridge-path">{settings.creationBridge.piNodeResolvedPath}</code>
+                  ) : (
+                    `${settings.creationBridge.piNodeBinary} 未解析`
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Pi sidecar</dt>
+                <dd>
+                  {settings.creationBridge.piSidecarScriptPath ? (
+                    <code className="settings-bridge-path">{settings.creationBridge.piSidecarScriptPath}</code>
+                  ) : (
+                    "未找到脚本"
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Agent 超时</dt>
+                <dd>{settings.creationBridge.agentTimeoutSecs}s · 重试 {settings.creationBridge.agentRetryAttempts} 次</dd>
+              </div>
+              <div>
                 <dt>skill-create</dt>
                 <dd>{settings.creationBridge.skillCreateCommandAvailable ? "可用" : "不可用"}</dd>
               </div>

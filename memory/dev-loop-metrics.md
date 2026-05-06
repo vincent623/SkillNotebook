@@ -253,3 +253,16 @@
 | Fake-success guard | preserved | Exhausted retries still return an error; the system does not silently use template fallback after invoking Claude. |
 | Diagnostics | updated | `skill doctor generator` and Settings expose Claude timeout and retry parameters. |
 | Validation | green | `cargo test --manifest-path src-tauri/Cargo.toml` passes with 41 tests; `npm run lint`, `npm run build`, `git diff --check`, Tauri build, strict codesign, and bundled CLI `--version` pass. |
+
+### V0.3.0 Pi Sidecar Runtime
+
+| Metric | Value | Notes |
+| --- | --- | --- |
+| Runtime dependency | added | `@mariozechner/pi-ai` powers the generic OpenAI-compatible sidecar. |
+| Sidecar artifact | implemented | Source lives in `sidecars/pi-skill-draft.mjs`; build output is `dist-sidecars/pi-skill-draft.mjs` and is packaged as a Tauri resource. |
+| Generator order | updated | Auto mode prefers configured `pi_sidecar`, then `skill-create`, then Claude CLI, then explicit/no-generator template fallback. |
+| Runtime configuration | implemented | Agent base URL, API key, model, provider, timeout, retries, Node binary, and sidecar script are env-driven. |
+| Diagnostics/UI | implemented | `skill doctor generator`, Settings, and create-preview labels expose pi sidecar availability and provider/model state. |
+| Fake-success guard | preserved | A configured pi sidecar failure is surfaced and does not silently become a local template draft. |
+| Provider transport | streaming + fallback | Local OpenAI-compatible mock tests pass for pi-ai streaming SSE and non-streaming `/chat/completions` fallback. |
+| Validation | green | `cargo test` passes with 43 tests; `npm run lint`, `npm run build`, `git diff --check`, mock pi CLI E2E, Tauri build, strict codesign, bundled CLI `--version`, and bundled sidecar resource resolution pass. |

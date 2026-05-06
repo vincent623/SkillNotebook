@@ -25,8 +25,12 @@ const DEFAULT_CLAUDE_RETRY_ATTEMPTS: u64 = 3;
 const DEFAULT_CLAUDE_RETRY_BACKOFF_SECS: u64 = 8;
 const DEFAULT_SKILL_CREATE_BINARY: &str = "skill-create";
 const DEFAULT_SKILL_CREATE_TIMEOUT_SECS: u64 = 60;
+const DEFAULT_PI_NODE_BINARY: &str = "node";
+const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_AGENT_RETRY_ATTEMPTS: u64 = 3;
 const CLAUDE_POLL_INTERVAL_MS: u64 = 100;
 const CREATOR_FALLBACK: &str = "template_fallback";
+const CREATOR_PI_SIDECAR: &str = "pi_sidecar";
 const CREATOR_SKILL_CREATE: &str = "skill_create_cli";
 const CREATOR_CLAUDE: &str = "claude_cli";
 const CREATE_PREVIEW_TTL_HOURS: i64 = 24;
@@ -64,6 +68,7 @@ struct DraftResult {
 enum CreatorMode {
     Auto,
     Template,
+    PiSidecar,
     SkillCreate,
     ClaudeCli,
 }
@@ -78,6 +83,14 @@ struct CreatorBridgeOptions {
     claude_timeout_secs: u64,
     claude_retry_attempts: u64,
     claude_retry_backoff_secs: u64,
+    pi_node_bin: String,
+    pi_sidecar_script: Option<String>,
+    agent_provider: String,
+    agent_base_url: Option<String>,
+    agent_api_key: Option<String>,
+    agent_model: Option<String>,
+    agent_timeout_secs: u64,
+    agent_retry_attempts: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -86,14 +99,30 @@ struct GeneratorDraftPayload {
     name: String,
     slug: String,
     description: String,
+    #[serde(alias = "skill_md")]
     skill_md: String,
+    #[serde(alias = "system_prompt")]
     system_prompt: String,
+    #[serde(alias = "task_prompt")]
     task_prompt: String,
+    #[serde(alias = "example_markdown")]
     example_markdown: String,
+    #[serde(alias = "smoke_prompt")]
     smoke_prompt: String,
+    #[serde(alias = "expected_output")]
     expected_output: String,
     expectations: Vec<String>,
     tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct PiSidecarResponse {
+    text: String,
+    provider: String,
+    model: String,
+    response_model: Option<String>,
+    stop_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,14 +248,23 @@ pub fn creator_bridge_status() -> serde_json::Value {
     let options = resolve_creator_bridge_options();
     let claude_path = resolve_command_path(&options.claude_bin);
     let skill_create_path = resolve_command_path(&options.skill_create_bin);
+    let pi_node_path = resolve_command_path(&options.pi_node_bin);
+    let pi_sidecar_script_path =
+        resolve_pi_sidecar_script_path(options.pi_sidecar_script.as_deref());
     let claude_available = claude_path.is_some();
     let skill_create_available = skill_create_path.is_some();
+    let pi_sidecar_configured = is_pi_sidecar_configured(&options);
+    let pi_sidecar_available =
+        pi_sidecar_configured && pi_node_path.is_some() && pi_sidecar_script_path.is_some();
     let preferred_generator = match options.mode {
         CreatorMode::Template => CREATOR_FALLBACK,
+        CreatorMode::PiSidecar => CREATOR_PI_SIDECAR,
         CreatorMode::SkillCreate => CREATOR_SKILL_CREATE,
         CreatorMode::ClaudeCli => CREATOR_CLAUDE,
         CreatorMode::Auto => {
-            if skill_create_available {
+            if pi_sidecar_available {
+                CREATOR_PI_SIDECAR
+            } else if skill_create_available {
                 CREATOR_SKILL_CREATE
             } else if claude_available {
                 CREATOR_CLAUDE
@@ -239,6 +277,17 @@ pub fn creator_bridge_status() -> serde_json::Value {
     json!({
         "mode": options.mode.as_str(),
         "preferredGenerator": preferred_generator,
+        "piSidecarAvailable": pi_sidecar_available,
+        "piSidecarConfigured": pi_sidecar_configured,
+        "piNodeBinary": options.pi_node_bin,
+        "piNodeResolvedPath": pi_node_path.map(|path| path.to_string_lossy().to_string()),
+        "piSidecarScriptPath": pi_sidecar_script_path.map(|path| path.to_string_lossy().to_string()),
+        "agentProvider": options.agent_provider,
+        "agentBaseUrlConfigured": options.agent_base_url.is_some(),
+        "agentApiKeyConfigured": options.agent_api_key.is_some(),
+        "agentModel": options.agent_model,
+        "agentTimeoutSecs": options.agent_timeout_secs,
+        "agentRetryAttempts": options.agent_retry_attempts,
         "claudeCliAvailable": claude_available,
         "skillCreateCommandAvailable": skill_create_available,
         "claudeBinary": options.claude_bin,
@@ -253,12 +302,14 @@ pub fn creator_bridge_status() -> serde_json::Value {
 }
 
 fn resolve_creator_bridge_options() -> CreatorBridgeOptions {
-    let mode = match env::var("SKILL_NOTEBOOK_CREATOR_MODE")
+    let mode = match env::var("SKILL_NOTEBOOK_GENERATOR_RUNTIME")
+        .or_else(|_| env::var("SKILL_NOTEBOOK_CREATOR_MODE"))
         .unwrap_or_else(|_| "auto".to_string())
         .to_lowercase()
         .as_str()
     {
         "template" | "fallback" => CreatorMode::Template,
+        "pi" | "pi_sidecar" | "pi-sidecar" | "agent" | "agent_runtime" => CreatorMode::PiSidecar,
         "skill_create" | "skill-create" => CreatorMode::SkillCreate,
         "claude" | "claude_cli" => CreatorMode::ClaudeCli,
         _ => CreatorMode::Auto,
@@ -293,6 +344,38 @@ fn resolve_creator_bridge_options() -> CreatorBridgeOptions {
             .ok()
             .and_then(|value| value.trim().parse::<u64>().ok())
             .unwrap_or(DEFAULT_CLAUDE_RETRY_BACKOFF_SECS),
+        pi_node_bin: env::var("SKILL_NOTEBOOK_PI_NODE_BIN")
+            .unwrap_or_else(|_| DEFAULT_PI_NODE_BINARY.to_string()),
+        pi_sidecar_script: env::var("SKILL_NOTEBOOK_PI_SIDECAR_SCRIPT")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        agent_provider: env::var("SKILL_NOTEBOOK_AGENT_PROVIDER")
+            .unwrap_or_else(|_| "openai-compatible".to_string())
+            .trim()
+            .to_string(),
+        agent_base_url: env::var("SKILL_NOTEBOOK_AGENT_BASE_URL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        agent_api_key: env::var("SKILL_NOTEBOOK_AGENT_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        agent_model: env::var("SKILL_NOTEBOOK_AGENT_MODEL")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        agent_timeout_secs: env::var("SKILL_NOTEBOOK_AGENT_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_AGENT_TIMEOUT_SECS),
+        agent_retry_attempts: env::var("SKILL_NOTEBOOK_AGENT_RETRY_ATTEMPTS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_AGENT_RETRY_ATTEMPTS),
     }
 }
 
@@ -1250,12 +1333,62 @@ fn build_initial_draft(
     let fallback = || fallback_draft_result(req, "Local template draft used.");
     let skill_create_available = command_exists(&options.skill_create_bin);
     let claude_available = command_exists(&options.claude_bin);
+    let pi_sidecar_available = is_pi_sidecar_available(options);
 
     match options.mode {
         CreatorMode::Template => Ok(fallback()),
+        CreatorMode::PiSidecar => generate_with_pi_sidecar(req, options),
         CreatorMode::SkillCreate => generate_with_skill_create_cli(req, options),
         CreatorMode::ClaudeCli => generate_with_claude_cli(req, options),
         CreatorMode::Auto => {
+            if pi_sidecar_available {
+                match generate_with_pi_sidecar(req, options) {
+                    Ok(result) => return Ok(result),
+                    Err(error) => {
+                        if skill_create_available {
+                            match generate_with_skill_create_cli(req, options) {
+                                Ok(result) => return Ok(result),
+                                Err(skill_create_error) => {
+                                    if claude_available {
+                                        match generate_with_claude_cli(req, options) {
+                                            Ok(result) => return Ok(result),
+                                            Err(claude_error) => return Err(format!(
+                                                "pi sidecar draft generation failed, skill-create draft generation failed, and Claude CLI draft generation failed: {}; {}; {}",
+                                                summarize_error(&error),
+                                                summarize_error(&skill_create_error),
+                                                summarize_error(&claude_error)
+                                            )),
+                                        }
+                                    }
+
+                                    return Err(format!(
+                                        "pi sidecar draft generation failed and skill-create draft generation failed: {}; {}",
+                                        summarize_error(&error),
+                                        summarize_error(&skill_create_error)
+                                    ));
+                                }
+                            }
+                        }
+
+                        if claude_available {
+                            match generate_with_claude_cli(req, options) {
+                                Ok(result) => return Ok(result),
+                                Err(claude_error) => return Err(format!(
+                                    "pi sidecar draft generation failed and Claude CLI draft generation failed: {}; {}",
+                                    summarize_error(&error),
+                                    summarize_error(&claude_error)
+                                )),
+                            }
+                        }
+
+                        return Err(format!(
+                            "pi sidecar draft generation failed: {}",
+                            summarize_error(&error)
+                        ));
+                    }
+                }
+            }
+
             if skill_create_available {
                 match generate_with_skill_create_cli(req, options) {
                     Ok(result) => return Ok(result),
@@ -1351,6 +1484,58 @@ fn generate_with_claude_cli(
     })
 }
 
+fn generate_with_pi_sidecar(
+    req: &CreatePackageFromNlRequest,
+    options: &CreatorBridgeOptions,
+) -> Result<DraftResult, String> {
+    if !is_pi_sidecar_configured(options) {
+        return Err("pi sidecar is not configured; set SKILL_NOTEBOOK_AGENT_BASE_URL, SKILL_NOTEBOOK_AGENT_API_KEY, and SKILL_NOTEBOOK_AGENT_MODEL".to_string());
+    }
+
+    let prompt = build_generation_prompt(req.prompt.as_str(), req.context.as_deref());
+    let response = call_pi_sidecar_text(&prompt, options)?;
+    let payload = parse_generator_draft_payload(&response.text)?;
+    let draft = normalize_generator_draft(payload, req.prompt.as_str(), req.context.as_deref());
+    let provider = if response.provider.trim().is_empty() {
+        options.agent_provider.as_str()
+    } else {
+        response.provider.as_str()
+    };
+    let model = if response.model.trim().is_empty() {
+        options.agent_model.as_deref().unwrap_or("unknown")
+    } else {
+        response.model.as_str()
+    };
+    let mut generation_summary = format!(
+        "Initial draft generated via pi sidecar using `{}` / `{}`.",
+        provider, model
+    );
+    if let Some(response_model) = response
+        .response_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != model)
+    {
+        generation_summary.push_str(&format!(" Response model `{}`.", response_model));
+    }
+    if let Some(stop_reason) = response
+        .stop_reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        generation_summary.push_str(&format!(" Stop reason `{}`.", stop_reason));
+    }
+
+    Ok(DraftResult {
+        draft,
+        generator_used: CREATOR_PI_SIDECAR.to_string(),
+        generation_summary,
+        prompt_log: Some(prompt),
+        response_log: Some(response.text),
+    })
+}
+
 fn fallback_draft_result(req: &CreatePackageFromNlRequest, summary: &str) -> DraftResult {
     DraftResult {
         draft: derive_template_draft(req.prompt.as_str(), req.context.as_deref()),
@@ -1394,6 +1579,123 @@ fn call_claude_text(prompt: &str, options: &CreatorBridgeOptions) -> Result<Stri
     }
 
     Err(last_error)
+}
+
+fn call_pi_sidecar_text(
+    prompt: &str,
+    options: &CreatorBridgeOptions,
+) -> Result<PiSidecarResponse, String> {
+    let node_path = resolve_command_path(&options.pi_node_bin)
+        .ok_or_else(|| format!("node binary not found: {}", options.pi_node_bin))?;
+    let sidecar_script = resolve_pi_sidecar_script_path(options.pi_sidecar_script.as_deref())
+        .ok_or_else(|| {
+            "pi sidecar script not found; run `npm run build:sidecars` or set SKILL_NOTEBOOK_PI_SIDECAR_SCRIPT".to_string()
+        })?;
+    let base_url = options.agent_base_url.as_deref().ok_or_else(|| {
+        "SKILL_NOTEBOOK_AGENT_BASE_URL is required for pi sidecar generation".to_string()
+    })?;
+    let api_key = options.agent_api_key.as_deref().ok_or_else(|| {
+        "SKILL_NOTEBOOK_AGENT_API_KEY is required for pi sidecar generation".to_string()
+    })?;
+    let model = options.agent_model.as_deref().ok_or_else(|| {
+        "SKILL_NOTEBOOK_AGENT_MODEL is required for pi sidecar generation".to_string()
+    })?;
+    let payload = json!({
+        "command": "generate_skill_draft",
+        "prompt": prompt,
+        "provider": options.agent_provider,
+        "baseUrl": base_url,
+        "apiKey": api_key,
+        "model": model,
+        "timeoutSecs": options.agent_timeout_secs,
+        "retryAttempts": options.agent_retry_attempts,
+        "maxTokensField": "max_tokens",
+        "supportsStore": false,
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "supportsUsageInStreaming": false,
+        "supportsStrictMode": false,
+    });
+    let payload_text = serde_json::to_string(&payload)
+        .map_err(|error| format!("failed to serialize pi sidecar payload: {}", error))?;
+
+    let mut command = Command::new(node_path);
+    command
+        .arg(sidecar_script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .current_dir(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR"))),
+        );
+    command.env("PATH", augmented_command_path_value());
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to spawn pi sidecar: {}", error))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(payload_text.as_bytes())
+            .map_err(|error| format!("failed to write pi sidecar payload: {}", error))?;
+    }
+
+    let timeout = Duration::from_secs(options.agent_timeout_secs);
+    let started_at = Instant::now();
+
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("failed waiting for pi sidecar: {}", error))?
+        {
+            let stdout = read_child_stream(child.stdout.take(), "pi sidecar", "stdout")?;
+            let stderr = read_child_stream(child.stderr.take(), "pi sidecar", "stderr")?;
+
+            if !status.success() {
+                return Err(format!(
+                    "pi sidecar exited {}: {}",
+                    status,
+                    summarize_process_output(&stdout, &stderr)
+                ));
+            }
+
+            let response =
+                serde_json::from_str::<PiSidecarResponse>(stdout.trim()).map_err(|error| {
+                    format!(
+                        "failed to parse pi sidecar response: {}",
+                        summarize_error(&format!("{}\nresponse: {}", error, stdout.trim()))
+                    )
+                })?;
+            if response.text.trim().is_empty() {
+                return Err("pi sidecar returned no draft text".to_string());
+            }
+
+            return Ok(response);
+        }
+
+        if started_at.elapsed() >= timeout {
+            child.kill().ok();
+            child.wait().ok();
+            let stdout =
+                read_child_stream(child.stdout.take(), "pi sidecar", "stdout").unwrap_or_default();
+            let stderr =
+                read_child_stream(child.stderr.take(), "pi sidecar", "stderr").unwrap_or_default();
+            let details = summarize_process_output(&stdout, &stderr);
+            let suffix = if details == "no output" {
+                String::new()
+            } else {
+                format!(" {}", details)
+            };
+            return Err(format!(
+                "pi sidecar timed out after {}s.{} Set SKILL_NOTEBOOK_AGENT_TIMEOUT_SECS to a larger value for long source materials.",
+                options.agent_timeout_secs, suffix
+            ));
+        }
+
+        thread::sleep(Duration::from_millis(CLAUDE_POLL_INTERVAL_MS));
+    }
 }
 
 fn call_claude_text_once(prompt: &str, options: &CreatorBridgeOptions) -> Result<String, String> {
@@ -2179,6 +2481,90 @@ fn command_exists(command: &str) -> bool {
     resolve_command_path(command).is_some()
 }
 
+fn is_pi_sidecar_configured(options: &CreatorBridgeOptions) -> bool {
+    options
+        .agent_base_url
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+        && options
+            .agent_api_key
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        && options
+            .agent_model
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+}
+
+fn is_pi_sidecar_available(options: &CreatorBridgeOptions) -> bool {
+    is_pi_sidecar_configured(options)
+        && resolve_command_path(&options.pi_node_bin).is_some()
+        && resolve_pi_sidecar_script_path(options.pi_sidecar_script.as_deref()).is_some()
+}
+
+fn resolve_pi_sidecar_script_path(configured: Option<&str>) -> Option<PathBuf> {
+    if let Some(configured) = configured.map(str::trim).filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(configured);
+        if path.is_file() {
+            return Some(path);
+        }
+
+        if path.is_relative() {
+            let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")));
+            let rooted = project_root.join(path);
+            if rooted.is_file() {
+                return Some(rooted);
+            }
+        }
+    }
+
+    default_pi_sidecar_candidate_paths()
+        .into_iter()
+        .find(|path| path.is_file())
+}
+
+fn default_pi_sidecar_candidate_paths() -> Vec<PathBuf> {
+    let project_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")));
+    let mut candidates = vec![
+        project_root
+            .join("dist-sidecars")
+            .join("pi-skill-draft.mjs"),
+        project_root.join("sidecars").join("pi-skill-draft.mjs"),
+    ];
+
+    if let Ok(exe_path) = env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join("pi-skill-draft.mjs"));
+            candidates.push(exe_dir.join("dist-sidecars").join("pi-skill-draft.mjs"));
+            if let Some(contents_dir) = exe_dir.parent() {
+                let resources_dir = contents_dir.join("Resources");
+                candidates.push(resources_dir.join("pi-skill-draft.mjs"));
+                candidates.push(
+                    resources_dir
+                        .join("dist-sidecars")
+                        .join("pi-skill-draft.mjs"),
+                );
+                candidates.push(resources_dir.join("sidecars").join("pi-skill-draft.mjs"));
+                candidates.push(
+                    resources_dir
+                        .join("_up_")
+                        .join("dist-sidecars")
+                        .join("pi-skill-draft.mjs"),
+                );
+            }
+        }
+    }
+
+    candidates
+}
+
 fn resolve_command_path(command: &str) -> Option<PathBuf> {
     if command.contains('/') {
         let path = PathBuf::from(command);
@@ -2375,6 +2761,7 @@ impl CreatorMode {
         match self {
             CreatorMode::Auto => "auto",
             CreatorMode::Template => "template",
+            CreatorMode::PiSidecar => "pi_sidecar",
             CreatorMode::SkillCreate => "skill_create",
             CreatorMode::ClaudeCli => "claude_cli",
         }
@@ -2400,9 +2787,10 @@ mod tests {
         generate_package_preview_in_workspace_with_options, read_preview_manifest,
         unique_package_slug, CommitPackagePreviewRequest, CreatePackageFromNlRequest,
         CreatePackageFromSourcesRequest, CreatorBridgeOptions, CreatorMode,
-        DiscardPackagePreviewRequest, CREATOR_CLAUDE, CREATOR_FALLBACK, CREATOR_SKILL_CREATE,
+        DiscardPackagePreviewRequest, CREATOR_CLAUDE, CREATOR_FALLBACK, CREATOR_PI_SIDECAR,
+        CREATOR_SKILL_CREATE, DEFAULT_AGENT_RETRY_ATTEMPTS, DEFAULT_AGENT_TIMEOUT_SECS,
         DEFAULT_CLAUDE_BINARY, DEFAULT_CLAUDE_RETRY_ATTEMPTS, DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
-        DEFAULT_CLAUDE_TIMEOUT_SECS, DEFAULT_SKILL_CREATE_BINARY,
+        DEFAULT_CLAUDE_TIMEOUT_SECS, DEFAULT_PI_NODE_BINARY, DEFAULT_SKILL_CREATE_BINARY,
         DEFAULT_SKILL_CREATE_TIMEOUT_SECS,
     };
 
@@ -2440,11 +2828,78 @@ mod tests {
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
             claude_retry_attempts: DEFAULT_CLAUDE_RETRY_ATTEMPTS,
             claude_retry_backoff_secs: DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
+            pi_node_bin: DEFAULT_PI_NODE_BINARY.to_string(),
+            pi_sidecar_script: None,
+            agent_provider: "openai-compatible".to_string(),
+            agent_base_url: None,
+            agent_api_key: None,
+            agent_model: None,
+            agent_timeout_secs: DEFAULT_AGENT_TIMEOUT_SECS,
+            agent_retry_attempts: DEFAULT_AGENT_RETRY_ATTEMPTS,
         }
     }
 
     fn shell_single_quote(value: &str) -> String {
         format!("'{}'", value.replace('\'', "'\\''"))
+    }
+
+    fn write_mock_pi_runtime(
+        root: &PathBuf,
+        draft_name: &str,
+        draft_slug: &str,
+    ) -> (PathBuf, PathBuf) {
+        let script_path = root.join("mock-pi-sidecar.mjs");
+        filesystem::write_text_file(&script_path, "// mock sidecar placeholder\n")
+            .expect("mock pi sidecar");
+
+        let response_text = format!(
+            "<draft_json>{}</draft_json>",
+            serde_json::to_string(&json!({
+                "name": draft_name,
+                "slug": draft_slug,
+                "description": "Creates model-backed skill drafts. Use when testing the pi sidecar generator.",
+                "skill_md": format!(
+                    "---\nname: {}\ndescription: \"Creates model-backed skill drafts. Use when testing the pi sidecar generator.\"\n---\n\n# {}\n\n## Overview\nGenerate a model-backed skill package.\n",
+                    draft_slug, draft_name
+                ),
+                "system_prompt": "Stay on the requested skill-generation task.",
+                "task_prompt": "1. Read the request.\n2. Draft the skill package.",
+                "example_markdown": "## Example\n\nInput: a source workflow\n\nOutput: a reusable skill package",
+                "smoke_prompt": "Draft a skill from this workflow.",
+                "expected_output": "A complete skill package draft.",
+                "expectations": [
+                    "SKILL.md frontmatter validates successfully.",
+                    "The package describes when to use the skill."
+                ],
+                "tags": ["pi", "agent", "draft"]
+            }))
+            .expect("mock pi draft json")
+        );
+        let response = serde_json::to_string(&json!({
+            "ok": true,
+            "runtime": "pi_sidecar",
+            "provider": "mock-provider",
+            "model": "mock-model",
+            "responseModel": "mock-response-model",
+            "stopReason": "stop",
+            "text": response_text
+        }))
+        .expect("mock pi response json");
+
+        let node_bin = root.join("mock-node.sh");
+        filesystem::write_text_file(
+            &node_bin,
+            &format!(
+                "#!/bin/sh\ncat >/dev/null\ncat <<'EOF'\n{}\nEOF\n",
+                response
+            ),
+        )
+        .expect("mock node runtime");
+        let mut permissions = fs::metadata(&node_bin).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&node_bin, permissions).expect("chmod");
+
+        (node_bin, script_path)
     }
 
     fn set_preview_created_at(preview_root: &PathBuf, created_at: &str) {
@@ -2752,6 +3207,108 @@ mod tests {
     }
 
     #[test]
+    fn uses_mocked_pi_sidecar_when_configured() {
+        let root = make_temp_project_root("pi-sidecar");
+        let (mock_node, mock_sidecar) =
+            write_mock_pi_runtime(&root, "Pi Draft Builder", "pi-draft-builder");
+        let request = CreatePackageFromNlRequest {
+            project_root_id: "project_root-test".to_string(),
+            prompt: "Create a reusable skill for testing a model-backed sidecar runtime."
+                .to_string(),
+            context: None,
+        };
+        let options = CreatorBridgeOptions {
+            mode: CreatorMode::PiSidecar,
+            pi_node_bin: mock_node.to_string_lossy().to_string(),
+            pi_sidecar_script: Some(mock_sidecar.to_string_lossy().to_string()),
+            agent_provider: "mock-provider".to_string(),
+            agent_base_url: Some("http://127.0.0.1:65535/v1".to_string()),
+            agent_api_key: Some("test-key".to_string()),
+            agent_model: Some("mock-model".to_string()),
+            agent_timeout_secs: 10,
+            agent_retry_attempts: 1,
+            ..template_options()
+        };
+
+        let response = create_package_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &options,
+        )
+        .expect("pi sidecar package created");
+
+        assert_eq!(response.generator_used, CREATOR_PI_SIDECAR);
+        assert_eq!(response.slug, "pi-draft-builder");
+        assert!(response.generation_summary.contains("pi sidecar"));
+        assert!(response.generation_summary.contains("mock-provider"));
+        assert!(filesystem::canonical_skills_root(&root)
+            .join(&response.slug)
+            .join("SKILL.md")
+            .exists());
+        let system_prompt = fs::read_to_string(
+            filesystem::canonical_skills_root(&root)
+                .join(&response.slug)
+                .join("prompts")
+                .join("system.md"),
+        )
+        .expect("system prompt");
+        assert!(system_prompt.contains("Stay on the requested skill-generation task."));
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn auto_mode_prefers_pi_sidecar_when_configured() {
+        let root = make_temp_project_root("auto-pi-sidecar");
+        let (mock_node, mock_sidecar) =
+            write_mock_pi_runtime(&root, "Pi Preferred", "pi-preferred");
+        let mock_skill_create = root.join("mock-skill-create.sh");
+        filesystem::write_text_file(
+            &mock_skill_create,
+            "#!/bin/sh\ncat <<'EOF'\n<draft_json>{\"name\":\"Skill Create Fallback\",\"slug\":\"skill-create-fallback\",\"description\":\"Should not be used. Use when testing selection logic.\",\"skill_md\":\"# Skill Create Fallback\",\"system_prompt\":\"\",\"task_prompt\":\"\",\"example_markdown\":\"\",\"smoke_prompt\":\"\",\"expected_output\":\"\",\"expectations\":[],\"tags\":[\"auto\"]}</draft_json>\nEOF\n",
+        )
+        .expect("mock skill-create");
+        let mut permissions = fs::metadata(&mock_skill_create)
+            .expect("metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&mock_skill_create, permissions).expect("chmod");
+
+        let request = CreatePackageFromNlRequest {
+            project_root_id: "project_root-test".to_string(),
+            prompt: "Create anything through the preferred runtime.".to_string(),
+            context: None,
+        };
+        let options = CreatorBridgeOptions {
+            mode: CreatorMode::Auto,
+            skill_create_bin: mock_skill_create.to_string_lossy().to_string(),
+            pi_node_bin: mock_node.to_string_lossy().to_string(),
+            pi_sidecar_script: Some(mock_sidecar.to_string_lossy().to_string()),
+            agent_provider: "mock-provider".to_string(),
+            agent_base_url: Some("http://127.0.0.1:65535/v1".to_string()),
+            agent_api_key: Some("test-key".to_string()),
+            agent_model: Some("mock-model".to_string()),
+            agent_timeout_secs: 10,
+            agent_retry_attempts: 1,
+            ..template_options()
+        };
+
+        let response = create_package_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &options,
+        )
+        .expect("auto pi package created");
+
+        assert_eq!(response.generator_used, CREATOR_PI_SIDECAR);
+        assert_eq!(response.slug, "pi-preferred");
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn uses_mocked_claude_cli_when_available() {
         let root = make_temp_project_root("claude");
         let mock_bin = root.join("mock-claude.sh");
@@ -2780,6 +3337,7 @@ mod tests {
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
             claude_retry_attempts: DEFAULT_CLAUDE_RETRY_ATTEMPTS,
             claude_retry_backoff_secs: DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
+            ..template_options()
         };
 
         let response = create_package_in_workspace_with_options(
@@ -2840,6 +3398,7 @@ mod tests {
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
             claude_retry_attempts: 2,
             claude_retry_backoff_secs: 0,
+            ..template_options()
         };
 
         let response = create_package_in_workspace_with_options(
@@ -2887,6 +3446,7 @@ mod tests {
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
             claude_retry_attempts: DEFAULT_CLAUDE_RETRY_ATTEMPTS,
             claude_retry_backoff_secs: DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
+            ..template_options()
         };
 
         let response = create_package_in_workspace_with_options(
@@ -2930,6 +3490,7 @@ mod tests {
             claude_timeout_secs: 1,
             claude_retry_attempts: 1,
             claude_retry_backoff_secs: 0,
+            ..template_options()
         };
 
         let error = create_package_in_workspace_with_options(
@@ -2979,6 +3540,7 @@ mod tests {
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
             claude_retry_attempts: DEFAULT_CLAUDE_RETRY_ATTEMPTS,
             claude_retry_backoff_secs: DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
+            ..template_options()
         };
 
         let response = create_package_in_workspace_with_options(
@@ -3039,6 +3601,7 @@ mod tests {
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
             claude_retry_attempts: DEFAULT_CLAUDE_RETRY_ATTEMPTS,
             claude_retry_backoff_secs: DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
+            ..template_options()
         };
 
         let response = create_package_in_workspace_with_options(
@@ -3063,5 +3626,16 @@ mod tests {
         assert!(status.get("claudeRetryBackoffSecs").is_some());
         assert!(status.get("claudeResolvedPath").is_some());
         assert!(status.get("skillCreateResolvedPath").is_some());
+        assert!(status.get("piSidecarAvailable").is_some());
+        assert!(status.get("piSidecarConfigured").is_some());
+        assert!(status.get("piNodeBinary").is_some());
+        assert!(status.get("piNodeResolvedPath").is_some());
+        assert!(status.get("piSidecarScriptPath").is_some());
+        assert!(status.get("agentProvider").is_some());
+        assert!(status.get("agentBaseUrlConfigured").is_some());
+        assert!(status.get("agentApiKeyConfigured").is_some());
+        assert!(status.get("agentModel").is_some());
+        assert!(status.get("agentTimeoutSecs").is_some());
+        assert!(status.get("agentRetryAttempts").is_some());
     }
 }
