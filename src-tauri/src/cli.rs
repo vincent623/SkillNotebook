@@ -508,13 +508,23 @@ fn execute(cli: &SkillCli) -> Result<RenderedOutput, String> {
                 .get("claudeTimeoutSecs")
                 .and_then(Value::as_u64)
                 .unwrap_or_default();
+            let claude_retry_attempts = status
+                .get("claudeRetryAttempts")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let claude_retry_backoff = status
+                .get("claudeRetryBackoffSecs")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
             let mut human = format!(
-                "Generator doctor for {}\nPreferred: {}\nClaude CLI: {}\nskill-create: {}\nClaude timeout: {}s",
+                "Generator doctor for {}\nPreferred: {}\nClaude CLI: {}\nskill-create: {}\nClaude timeout: {}s\nClaude retry: {} attempt(s), {}s base backoff",
                 project_root.root_path,
                 preferred,
                 if claude_available { "available" } else { "unavailable" },
                 if skill_create_available { "available" } else { "unavailable" },
-                claude_timeout
+                claude_timeout,
+                claude_retry_attempts,
+                claude_retry_backoff
             );
             if let Some(path) = status.get("claudeResolvedPath").and_then(Value::as_str) {
                 let _ = write!(human, "\nClaude path: {}", path);

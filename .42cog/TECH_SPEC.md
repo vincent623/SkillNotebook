@@ -126,6 +126,10 @@ src-tauri/src/
   - `create.commit`: `previewId`, `packageId`, `slug`, `packagePath`, `generatorUsed`
   - `export.zip`: `packageId`, `zipPath`, `sizeBytes`
   - full nested objects remain available for GUI/API parity
+- Claude CLI generation retries transient 429/rate-limit/overload failures before surfacing an error:
+  - `SKILL_NOTEBOOK_CLAUDE_RETRY_ATTEMPTS` controls total attempts
+  - `SKILL_NOTEBOOK_CLAUDE_RETRY_BACKOFF_SECS` controls exponential base backoff
+  - retry failure must not silently become template fallback
 - `app_bootstrap`
 - `project_root_open`
 - `project_root_create`

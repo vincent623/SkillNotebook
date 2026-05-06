@@ -188,6 +188,12 @@ export function SettingsPage() {
                 <dd>{settings.creationBridge.claudeTimeoutSecs}s</dd>
               </div>
               <div>
+                <dt>Claude 重试</dt>
+                <dd>
+                  {settings.creationBridge.claudeRetryAttempts} 次 · 间隔 {settings.creationBridge.claudeRetryBackoffSecs}s
+                </dd>
+              </div>
+              <div>
                 <dt>技能目录</dt>
                 <dd>{settings.skillRootName ?? ".skills"}</dd>
               </div>

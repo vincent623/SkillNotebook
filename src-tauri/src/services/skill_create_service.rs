@@ -21,6 +21,8 @@ use crate::utils::time::{now_iso, parse_iso, today_slug};
 
 const DEFAULT_CLAUDE_BINARY: &str = "claude";
 const DEFAULT_CLAUDE_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_CLAUDE_RETRY_ATTEMPTS: u64 = 3;
+const DEFAULT_CLAUDE_RETRY_BACKOFF_SECS: u64 = 8;
 const DEFAULT_SKILL_CREATE_BINARY: &str = "skill-create";
 const DEFAULT_SKILL_CREATE_TIMEOUT_SECS: u64 = 60;
 const CLAUDE_POLL_INTERVAL_MS: u64 = 100;
@@ -74,6 +76,8 @@ struct CreatorBridgeOptions {
     claude_bin: String,
     claude_model: Option<String>,
     claude_timeout_secs: u64,
+    claude_retry_attempts: u64,
+    claude_retry_backoff_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -242,6 +246,8 @@ pub fn creator_bridge_status() -> serde_json::Value {
         "skillCreateResolvedPath": skill_create_path.map(|path| path.to_string_lossy().to_string()),
         "claudeModel": options.claude_model,
         "claudeTimeoutSecs": options.claude_timeout_secs,
+        "claudeRetryAttempts": options.claude_retry_attempts,
+        "claudeRetryBackoffSecs": options.claude_retry_backoff_secs,
         "fallbackGenerator": CREATOR_FALLBACK,
     })
 }
@@ -278,6 +284,15 @@ fn resolve_creator_bridge_options() -> CreatorBridgeOptions {
             .and_then(|value| value.trim().parse::<u64>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_CLAUDE_TIMEOUT_SECS),
+        claude_retry_attempts: env::var("SKILL_NOTEBOOK_CLAUDE_RETRY_ATTEMPTS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_CLAUDE_RETRY_ATTEMPTS),
+        claude_retry_backoff_secs: env::var("SKILL_NOTEBOOK_CLAUDE_RETRY_BACKOFF_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_CLAUDE_RETRY_BACKOFF_SECS),
     }
 }
 
@@ -1347,6 +1362,41 @@ fn fallback_draft_result(req: &CreatePackageFromNlRequest, summary: &str) -> Dra
 }
 
 fn call_claude_text(prompt: &str, options: &CreatorBridgeOptions) -> Result<String, String> {
+    let attempts = options.claude_retry_attempts.max(1);
+    let mut last_error = String::new();
+
+    for attempt in 1..=attempts {
+        match call_claude_text_once(prompt, options) {
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                let retryable = is_retryable_claude_error(&error);
+                last_error = error;
+
+                if !retryable || attempt >= attempts {
+                    let mut message = last_error;
+                    if retryable {
+                        message = format!(
+                            "{} Retried {} time(s) because Claude reported a transient rate-limit/overload error. Try again later, switch SKILL_NOTEBOOK_CREATOR_MODE=template for a structural draft, or tune SKILL_NOTEBOOK_CLAUDE_RETRY_ATTEMPTS and SKILL_NOTEBOOK_CLAUDE_RETRY_BACKOFF_SECS.",
+                            message,
+                            attempts
+                        );
+                    }
+                    return Err(message);
+                }
+
+                let delay_secs =
+                    claude_retry_delay_secs(options.claude_retry_backoff_secs, attempt);
+                if delay_secs > 0 {
+                    thread::sleep(Duration::from_secs(delay_secs));
+                }
+            }
+        }
+    }
+
+    Err(last_error)
+}
+
+fn call_claude_text_once(prompt: &str, options: &CreatorBridgeOptions) -> Result<String, String> {
     let claude_path = resolve_command_path(&options.claude_bin)
         .ok_or_else(|| format!("claude binary not found: {}", options.claude_bin))?;
     let mut command = Command::new(claude_path);
@@ -1420,6 +1470,23 @@ fn call_claude_text(prompt: &str, options: &CreatorBridgeOptions) -> Result<Stri
 
         thread::sleep(Duration::from_millis(CLAUDE_POLL_INTERVAL_MS));
     }
+}
+
+fn is_retryable_claude_error(error: &str) -> bool {
+    let value = error.to_lowercase();
+    value.contains("429")
+        || value.contains("rate limit")
+        || value.contains("rate_limit")
+        || value.contains("too many requests")
+        || value.contains("overloaded")
+        || value.contains("request rejected")
+        || error.contains("访问量过大")
+        || error.contains("稍后再试")
+}
+
+fn claude_retry_delay_secs(base_secs: u64, previous_attempt: u64) -> u64 {
+    let exponent = previous_attempt.saturating_sub(1).min(4) as u32;
+    base_secs.saturating_mul(2u64.saturating_pow(exponent))
 }
 
 fn call_skill_create_text(prompt: &str, options: &CreatorBridgeOptions) -> Result<String, String> {
@@ -2334,7 +2401,8 @@ mod tests {
         unique_package_slug, CommitPackagePreviewRequest, CreatePackageFromNlRequest,
         CreatePackageFromSourcesRequest, CreatorBridgeOptions, CreatorMode,
         DiscardPackagePreviewRequest, CREATOR_CLAUDE, CREATOR_FALLBACK, CREATOR_SKILL_CREATE,
-        DEFAULT_CLAUDE_BINARY, DEFAULT_CLAUDE_TIMEOUT_SECS, DEFAULT_SKILL_CREATE_BINARY,
+        DEFAULT_CLAUDE_BINARY, DEFAULT_CLAUDE_RETRY_ATTEMPTS, DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
+        DEFAULT_CLAUDE_TIMEOUT_SECS, DEFAULT_SKILL_CREATE_BINARY,
         DEFAULT_SKILL_CREATE_TIMEOUT_SECS,
     };
 
@@ -2370,7 +2438,13 @@ mod tests {
             claude_bin: DEFAULT_CLAUDE_BINARY.to_string(),
             claude_model: None,
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
+            claude_retry_attempts: DEFAULT_CLAUDE_RETRY_ATTEMPTS,
+            claude_retry_backoff_secs: DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
         }
+    }
+
+    fn shell_single_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
     }
 
     fn set_preview_created_at(preview_root: &PathBuf, created_at: &str) {
@@ -2704,6 +2778,8 @@ mod tests {
             claude_bin: mock_bin.to_string_lossy().to_string(),
             claude_model: Some("mock-model".to_string()),
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
+            claude_retry_attempts: DEFAULT_CLAUDE_RETRY_ATTEMPTS,
+            claude_retry_backoff_secs: DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
         };
 
         let response = create_package_in_workspace_with_options(
@@ -2729,6 +2805,54 @@ mod tests {
             .join(&response.slug)
             .join("create-from-nl.json")
             .exists());
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn retries_claude_cli_when_rate_limited() {
+        let root = make_temp_project_root("claude-retry");
+        let mock_bin = root.join("retry-claude.sh");
+        let count_file = root.join("retry-count.txt");
+        filesystem::write_text_file(
+            &mock_bin,
+            &format!(
+                "#!/bin/sh\nCOUNT_FILE={}\nif [ ! -f \"$COUNT_FILE\" ]; then\n  echo 1 > \"$COUNT_FILE\"\n  echo 'API Error: Request rejected (429) · 该模型当前访问量过大，请您稍后再试'\n  exit 1\nfi\ncat <<'EOF'\n<draft_json>{{\"name\":\"Retried Meeting Mapper\",\"slug\":\"retried-meeting-mapper\",\"description\":\"Maps meeting notes after retry. Use when retrying transient generator errors.\",\"skill_md\":\"---\\nname: retried-meeting-mapper\\ndescription: \\\"Maps meeting notes after retry. Use when retrying transient generator errors.\\\"\\n---\\n\\n# Retried Meeting Mapper\\n\\n## Overview\\nTransform notes after retry.\\n\",\"system_prompt\":\"Stay concise.\",\"task_prompt\":\"1. Read notes.\\n2. Extract owners.\",\"example_markdown\":\"## Example\",\"smoke_prompt\":\"Summarize notes.\",\"expected_output\":\"Owner list.\",\"expectations\":[\"SKILL.md frontmatter validates successfully.\"],\"tags\":[\"retry\",\"meeting\"]}}</draft_json>\nEOF\n",
+                shell_single_quote(count_file.to_string_lossy().as_ref())
+            ),
+        )
+        .expect("mock retry claude");
+        let mut permissions = fs::metadata(&mock_bin).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&mock_bin, permissions).expect("chmod");
+
+        let request = CreatePackageFromNlRequest {
+            project_root_id: "project_root-test".to_string(),
+            prompt: "Create a reusable skill for retrying overloaded model requests.".to_string(),
+            context: None,
+        };
+        let options = CreatorBridgeOptions {
+            mode: CreatorMode::ClaudeCli,
+            skill_create_bin: DEFAULT_SKILL_CREATE_BINARY.to_string(),
+            skill_create_timeout_secs: DEFAULT_SKILL_CREATE_TIMEOUT_SECS,
+            claude_bin: mock_bin.to_string_lossy().to_string(),
+            claude_model: None,
+            claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
+            claude_retry_attempts: 2,
+            claude_retry_backoff_secs: 0,
+        };
+
+        let response = create_package_in_workspace_with_options(
+            &root,
+            "project_root-test",
+            &request,
+            &options,
+        )
+        .expect("claude package created after retry");
+
+        assert_eq!(response.generator_used, CREATOR_CLAUDE);
+        assert_eq!(response.slug, "retried-meeting-mapper");
+        assert!(count_file.exists());
 
         fs::remove_dir_all(root).ok();
     }
@@ -2761,6 +2885,8 @@ mod tests {
             claude_bin: mock_bin.to_string_lossy().to_string(),
             claude_model: Some("mock-model".to_string()),
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
+            claude_retry_attempts: DEFAULT_CLAUDE_RETRY_ATTEMPTS,
+            claude_retry_backoff_secs: DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
         };
 
         let response = create_package_in_workspace_with_options(
@@ -2802,6 +2928,8 @@ mod tests {
             claude_bin: mock_bin.to_string_lossy().to_string(),
             claude_model: None,
             claude_timeout_secs: 1,
+            claude_retry_attempts: 1,
+            claude_retry_backoff_secs: 0,
         };
 
         let error = create_package_in_workspace_with_options(
@@ -2849,6 +2977,8 @@ mod tests {
             claude_bin: DEFAULT_CLAUDE_BINARY.to_string(),
             claude_model: None,
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
+            claude_retry_attempts: DEFAULT_CLAUDE_RETRY_ATTEMPTS,
+            claude_retry_backoff_secs: DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
         };
 
         let response = create_package_in_workspace_with_options(
@@ -2907,6 +3037,8 @@ mod tests {
             claude_bin: mock_claude.to_string_lossy().to_string(),
             claude_model: None,
             claude_timeout_secs: DEFAULT_CLAUDE_TIMEOUT_SECS,
+            claude_retry_attempts: DEFAULT_CLAUDE_RETRY_ATTEMPTS,
+            claude_retry_backoff_secs: DEFAULT_CLAUDE_RETRY_BACKOFF_SECS,
         };
 
         let response = create_package_in_workspace_with_options(
@@ -2927,6 +3059,8 @@ mod tests {
         assert!(status.get("preferredGenerator").is_some());
         assert!(status.get("fallbackGenerator").is_some());
         assert!(status.get("claudeTimeoutSecs").is_some());
+        assert!(status.get("claudeRetryAttempts").is_some());
+        assert!(status.get("claudeRetryBackoffSecs").is_some());
         assert!(status.get("claudeResolvedPath").is_some());
         assert!(status.get("skillCreateResolvedPath").is_some());
     }

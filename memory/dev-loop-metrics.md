@@ -213,7 +213,7 @@
 | --- | --- | --- |
 | Tauri package command | green | `npm run tauri:build` completed and produced both macOS app and DMG bundles. |
 | App bundle artifact | `src-tauri/target/release/bundle/macos/Skill Notebook.app` | Release app bundle is present and launches locally. |
-| DMG artifact | `src-tauri/target/release/bundle/dmg/Skill Notebook_0.2.0_aarch64.dmg` | DMG is present after bundle regeneration. |
+| DMG artifact | `src-tauri/target/release/bundle/dmg/Skill Notebook_0.2.1_aarch64.dmg` | DMG is present after bundle regeneration. |
 | Local signing state | valid ad-hoc | Added `bundle.macOS.signingIdentity: "-"`; `codesign --verify --deep --strict --verbose=2` passes. |
 | Distribution signing state | not notarized | `spctl` rejects the ad-hoc signed app, as expected without Developer ID notarization credentials. |
 | Post-package lint scope | fixed | ESLint now ignores `target` and `src-tauri/target` so generated Tauri assets do not break `npm run lint`. |
@@ -242,3 +242,14 @@
 | Tauri package | green | `npm run tauri:build` produced `Skill Notebook.app` and `Skill Notebook_0.2.0_aarch64.dmg`; strict `codesign --verify --deep --strict` passes. |
 | Browser GUI smoke | green | Vite preview rendered the workbench, create preview, commit, export modal, and settings page with zero console errors. Browser-only Tauri fallback warnings are expected. |
 | Acceptance drift found | fixed | Settings About text now derives from the package version instead of a hard-coded `v0.1.0`. |
+
+### V0.2.1 Claude 429 Resilience
+
+| Metric | Value | Notes |
+| --- | --- | --- |
+| Patch trigger | Claude 429 overload | Real manual generation hit `API Error: Request rejected (429)` from Claude CLI stdout. |
+| Retry policy | implemented | Claude CLI retries transient 429/rate-limit/overload failures with configurable attempts and exponential base backoff. |
+| Default retry config | 3 attempts / 8s base | Override with `SKILL_NOTEBOOK_CLAUDE_RETRY_ATTEMPTS` and `SKILL_NOTEBOOK_CLAUDE_RETRY_BACKOFF_SECS`. |
+| Fake-success guard | preserved | Exhausted retries still return an error; the system does not silently use template fallback after invoking Claude. |
+| Diagnostics | updated | `skill doctor generator` and Settings expose Claude timeout and retry parameters. |
+| Validation | green | `cargo test --manifest-path src-tauri/Cargo.toml` passes with 41 tests; `npm run lint`, `npm run build`, `git diff --check`, Tauri build, strict codesign, and bundled CLI `--version` pass. |

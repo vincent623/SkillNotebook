@@ -170,6 +170,8 @@ export interface CreationBridgeStatus {
   skillCreateResolvedPath?: string | null;
   claudeModel?: string | null;
   claudeTimeoutSecs: number;
+  claudeRetryAttempts: number;
+  claudeRetryBackoffSecs: number;
   fallbackGenerator: string;
 }
 

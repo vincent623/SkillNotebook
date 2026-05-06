@@ -261,3 +261,9 @@
 - After a semantic version bump, verify every visible product version label, CLI `--version`, Tauri bundle name, and release artifact path against the same source.
 - Avoid hard-coded About-page versions; inject the package version at build time so browser preview and Tauri builds stay aligned.
 - Include version-label checks in acceptance because stale labels do not break tests but they break user trust.
+
+### Transient Generator Failures Need Retries, Not Fake Success
+
+- Treat provider 429/rate-limit/overload responses as retryable infrastructure failures before reporting them to the user.
+- Automatic retry should preserve the "no fake template success" rule: only explicit template mode may create a structural fallback draft.
+- Surface retry attempts, timeout, and backoff in diagnostics/settings so users can distinguish local misconfiguration from provider pressure.

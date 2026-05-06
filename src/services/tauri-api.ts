@@ -246,6 +246,8 @@ function cloneSettings(): AppSettings {
       claudeBinary: "claude",
       claudeModel: null,
       claudeTimeoutSecs: 300,
+      claudeRetryAttempts: 3,
+      claudeRetryBackoffSecs: 8,
       fallbackGenerator: "template_fallback",
     },
   };
