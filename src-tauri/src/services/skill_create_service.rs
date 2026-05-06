@@ -20,7 +20,7 @@ use crate::utils::ids::slugify;
 use crate::utils::time::{now_iso, parse_iso, today_slug};
 
 const DEFAULT_CLAUDE_BINARY: &str = "claude";
-const DEFAULT_CLAUDE_TIMEOUT_SECS: u64 = 60;
+const DEFAULT_CLAUDE_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_SKILL_CREATE_BINARY: &str = "skill-create";
 const DEFAULT_SKILL_CREATE_TIMEOUT_SECS: u64 = 60;
 const CLAUDE_POLL_INTERVAL_MS: u64 = 100;
@@ -213,8 +213,10 @@ pub fn cleanup_stale_package_previews(root_path: &str) -> Result<usize, String> 
 
 pub fn creator_bridge_status() -> serde_json::Value {
     let options = resolve_creator_bridge_options();
-    let claude_available = command_exists(&options.claude_bin);
-    let skill_create_available = command_exists(&options.skill_create_bin);
+    let claude_path = resolve_command_path(&options.claude_bin);
+    let skill_create_path = resolve_command_path(&options.skill_create_bin);
+    let claude_available = claude_path.is_some();
+    let skill_create_available = skill_create_path.is_some();
     let preferred_generator = match options.mode {
         CreatorMode::Template => CREATOR_FALLBACK,
         CreatorMode::SkillCreate => CREATOR_SKILL_CREATE,
@@ -236,6 +238,8 @@ pub fn creator_bridge_status() -> serde_json::Value {
         "claudeCliAvailable": claude_available,
         "skillCreateCommandAvailable": skill_create_available,
         "claudeBinary": options.claude_bin,
+        "claudeResolvedPath": claude_path.map(|path| path.to_string_lossy().to_string()),
+        "skillCreateResolvedPath": skill_create_path.map(|path| path.to_string_lossy().to_string()),
         "claudeModel": options.claude_model,
         "claudeTimeoutSecs": options.claude_timeout_secs,
         "fallbackGenerator": CREATOR_FALLBACK,
@@ -441,8 +445,8 @@ fn generate_package_preview_from_sources_in_workspace_with_options(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
             format!(
-                "Create a reusable skill from {} local source path(s).",
-                source_context.requested_paths.len()
+                "Create a reusable skill from these local source materials: {}.",
+                summarize_source_names(&source_context.requested_paths)
             )
         });
     let mut context_parts = Vec::new();
@@ -771,7 +775,7 @@ fn build_source_context(
 ) -> Result<SourceContext, String> {
     let requested = source_paths
         .iter()
-        .map(|value| value.trim())
+        .map(|value| normalize_source_path_input(value))
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
     if requested.is_empty() {
@@ -781,7 +785,7 @@ fn build_source_context(
     let mut requested_paths = Vec::new();
     let mut files = Vec::new();
     for raw_path in requested {
-        let source_path = resolve_source_path(project_root_path, raw_path)?;
+        let source_path = resolve_source_path(project_root_path, &raw_path)?;
         requested_paths.push(display_source_path(project_root_path, &source_path));
         collect_source_files(project_root_path, &source_path, &mut files)?;
         if files.len() >= SOURCE_FILE_LIMIT {
@@ -881,11 +885,10 @@ fn is_http_url(value: &str) -> bool {
 }
 
 fn fetch_url_text(url: &str) -> Result<String, String> {
-    if !command_exists("curl") {
-        return Err("URL generation requires curl on PATH".to_string());
-    }
+    let curl_path = resolve_command_path("curl")
+        .ok_or_else(|| "URL generation requires curl on PATH".to_string())?;
 
-    let output = Command::new("curl")
+    let output = Command::new(curl_path)
         .arg("--location")
         .arg("--max-time")
         .arg("12")
@@ -895,6 +898,7 @@ fn fetch_url_text(url: &str) -> Result<String, String> {
         .arg("--user-agent")
         .arg("SkillNotebook/0.1")
         .arg(url)
+        .env("PATH", augmented_command_path_value())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -926,26 +930,123 @@ fn fetch_url_text(url: &str) -> Result<String, String> {
 }
 
 fn resolve_source_path(project_root_path: &Path, raw_path: &str) -> Result<PathBuf, String> {
-    let candidate = Path::new(raw_path);
+    let cleaned_path = normalize_source_path_input(raw_path);
+    let candidate = Path::new(&cleaned_path);
     let path = if candidate.is_absolute() {
         candidate.to_path_buf()
     } else {
         project_root_path.join(candidate)
     };
 
-    let metadata = std::fs::symlink_metadata(&path)
-        .map_err(|error| format!("source path not found `{}`: {}", raw_path, error))?;
+    let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+        if cleaned_path == raw_path {
+            format!("source path not found `{}`: {}", cleaned_path, error)
+        } else {
+            format!(
+                "source path not found `{}` (normalized from `{}`): {}",
+                cleaned_path, raw_path, error
+            )
+        }
+    })?;
     if metadata.file_type().is_symlink() {
-        return Err(format!("source path cannot be a symlink: {}", raw_path));
+        return Err(format!("source path cannot be a symlink: {}", cleaned_path));
     }
     if !metadata.is_file() && !metadata.is_dir() {
         return Err(format!(
             "source path is not a file or directory: {}",
-            raw_path
+            cleaned_path
         ));
     }
 
     Ok(path)
+}
+
+fn normalize_source_path_input(value: &str) -> String {
+    let mut normalized = value.trim().to_string();
+    loop {
+        let Some(first) = normalized.chars().next() else {
+            return normalized;
+        };
+        let Some(last) = normalized.chars().last() else {
+            return normalized;
+        };
+        let quoted = (first == '"' && last == '"')
+            || (first == '\'' && last == '\'')
+            || (first == '“' && last == '”')
+            || (first == '‘' && last == '’');
+        if !quoted || normalized.chars().count() < 2 {
+            break;
+        }
+        normalized = normalized
+            .chars()
+            .skip(1)
+            .take(normalized.chars().count().saturating_sub(2))
+            .collect::<String>()
+            .trim()
+            .to_string();
+    }
+
+    if normalized.starts_with("file://") {
+        normalized = percent_decode_path(normalized.trim_start_matches("file://"));
+    }
+
+    unescape_pasted_path(&normalized)
+}
+
+fn unescape_pasted_path(value: &str) -> String {
+    let mut output = String::new();
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.peek().copied() {
+                Some('\\' | ' ' | '"' | '\'' | '(' | ')' | ':') => {
+                    output.push(chars.next().unwrap_or_default());
+                }
+                _ => output.push(ch),
+            }
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+fn percent_decode_path(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3]) {
+                if let Ok(decoded) = u8::from_str_radix(hex, 16) {
+                    output.push(decoded);
+                    index += 3;
+                    continue;
+                }
+            }
+        }
+        output.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&output).to_string()
+}
+
+fn summarize_source_names(paths: &[String]) -> String {
+    let mut names = paths
+        .iter()
+        .filter_map(|path| Path::new(path).file_name().and_then(|name| name.to_str()))
+        .filter(|name| !name.trim().is_empty())
+        .take(3)
+        .map(|name| format!("`{}`", name))
+        .collect::<Vec<_>>();
+
+    if names.is_empty() {
+        names.push(format!("{} source path(s)", paths.len()));
+    } else if paths.len() > names.len() {
+        names.push(format!("and {} more", paths.len() - names.len()));
+    }
+
+    names.join(", ")
 }
 
 fn collect_source_files(
@@ -1147,28 +1248,17 @@ fn build_initial_draft(
                         if claude_available {
                             match generate_with_claude_cli(req, options) {
                                 Ok(result) => return Ok(result),
-                                Err(claude_error) => {
-                                    return Ok(fallback_draft_result(
-                                        req,
-                                        &format!(
-                                            "skill-create draft generation failed and Claude CLI draft generation failed, so the local template draft was used instead: {}",
-                                            summarize_error(&format!(
-                                                "{}; {}",
-                                                summarize_error(&error),
-                                                summarize_error(&claude_error)
-                                            ))
-                                        ),
-                                    ));
-                                }
+                                Err(claude_error) => return Err(format!(
+                                    "skill-create draft generation failed and Claude CLI draft generation failed: {}; {}",
+                                    summarize_error(&error),
+                                    summarize_error(&claude_error)
+                                )),
                             }
                         }
 
-                        return Ok(fallback_draft_result(
-                            req,
-                            &format!(
-                                "skill-create draft generation failed and the local template draft was used instead: {}",
-                                summarize_error(&error)
-                            ),
+                        return Err(format!(
+                            "skill-create draft generation failed: {}",
+                            summarize_error(&error)
                         ));
                     }
                 }
@@ -1183,12 +1273,9 @@ fn build_initial_draft(
 
             match generate_with_claude_cli(req, options) {
                 Ok(result) => Ok(result),
-                Err(error) => Ok(fallback_draft_result(
-                    req,
-                    &format!(
-                        "Claude CLI draft generation failed and the local template draft was used instead: {}",
-                        summarize_error(&error)
-                    ),
+                Err(error) => Err(format!(
+                    "Claude CLI draft generation failed: {}",
+                    summarize_error(&error)
                 )),
             }
         }
@@ -1260,7 +1347,9 @@ fn fallback_draft_result(req: &CreatePackageFromNlRequest, summary: &str) -> Dra
 }
 
 fn call_claude_text(prompt: &str, options: &CreatorBridgeOptions) -> Result<String, String> {
-    let mut command = Command::new(&options.claude_bin);
+    let claude_path = resolve_command_path(&options.claude_bin)
+        .ok_or_else(|| format!("claude binary not found: {}", options.claude_bin))?;
+    let mut command = Command::new(claude_path);
     command
         .arg("-p")
         .arg("--output-format")
@@ -1279,6 +1368,7 @@ fn call_claude_text(prompt: &str, options: &CreatorBridgeOptions) -> Result<Stri
     }
 
     command.env_remove("CLAUDECODE");
+    command.env("PATH", augmented_command_path_value());
 
     let mut child = command
         .spawn()
@@ -1302,7 +1392,11 @@ fn call_claude_text(prompt: &str, options: &CreatorBridgeOptions) -> Result<Stri
             let stderr = read_child_stream(child.stderr.take(), "Claude CLI", "stderr")?;
 
             if !status.success() {
-                return Err(format!("Claude CLI exited {}: {}", status, stderr.trim()));
+                return Err(format!(
+                    "Claude CLI exited {}: {}",
+                    status,
+                    summarize_process_output(&stdout, &stderr)
+                ));
             }
 
             return Ok(stdout.trim().to_string());
@@ -1319,7 +1413,7 @@ fn call_claude_text(prompt: &str, options: &CreatorBridgeOptions) -> Result<Stri
                 format!(" {}", summarize_error(stderr.trim()))
             };
             return Err(format!(
-                "Claude CLI timed out after {}s.{}",
+                "Claude CLI timed out after {}s.{} Set SKILL_NOTEBOOK_CLAUDE_TIMEOUT_SECS to a larger value for long source materials.",
                 options.claude_timeout_secs, details
             ));
         }
@@ -1329,7 +1423,13 @@ fn call_claude_text(prompt: &str, options: &CreatorBridgeOptions) -> Result<Stri
 }
 
 fn call_skill_create_text(prompt: &str, options: &CreatorBridgeOptions) -> Result<String, String> {
-    let mut command = Command::new(&options.skill_create_bin);
+    let skill_create_path = resolve_command_path(&options.skill_create_bin).ok_or_else(|| {
+        format!(
+            "skill-create binary not found: {}",
+            options.skill_create_bin
+        )
+    })?;
+    let mut command = Command::new(skill_create_path);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1339,6 +1439,7 @@ fn call_skill_create_text(prompt: &str, options: &CreatorBridgeOptions) -> Resul
                 .parent()
                 .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR"))),
         );
+    command.env("PATH", augmented_command_path_value());
 
     let mut child = command
         .spawn()
@@ -1362,7 +1463,11 @@ fn call_skill_create_text(prompt: &str, options: &CreatorBridgeOptions) -> Resul
             let stderr = read_child_stream(child.stderr.take(), "skill-create", "stderr")?;
 
             if !status.success() {
-                return Err(format!("skill-create exited {}: {}", status, stderr.trim()));
+                return Err(format!(
+                    "skill-create exited {}: {}",
+                    status,
+                    summarize_process_output(&stdout, &stderr)
+                ));
             }
 
             return Ok(stdout.trim().to_string());
@@ -2004,14 +2109,58 @@ fn extract_tagged_payload<'a>(content: &'a str, tag: &str) -> Option<&'a str> {
 }
 
 fn command_exists(command: &str) -> bool {
+    resolve_command_path(command).is_some()
+}
+
+fn resolve_command_path(command: &str) -> Option<PathBuf> {
     if command.contains('/') {
-        return Path::new(command).exists();
+        let path = PathBuf::from(command);
+        return path.exists().then_some(path);
     }
 
-    env::var_os("PATH")
+    command_search_paths()
+        .into_iter()
+        .map(|path| path.join(command))
+        .find(|path| path.exists())
+}
+
+fn command_search_paths() -> Vec<PathBuf> {
+    let mut paths = env::var_os("PATH")
         .into_iter()
         .flat_map(|paths| env::split_paths(&paths).collect::<Vec<_>>())
-        .any(|path| path.join(command).exists())
+        .collect::<Vec<_>>();
+
+    if let Some(home) = env::var_os("HOME").map(PathBuf::from) {
+        paths.push(home.join(".local").join("bin"));
+        paths.push(home.join(".cargo").join("bin"));
+        paths.push(home.join(".bun").join("bin"));
+        paths.push(home.join("Library").join("pnpm"));
+    }
+
+    paths.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/usr/sbin"),
+        PathBuf::from("/sbin"),
+    ]);
+
+    let mut unique_paths = Vec::new();
+    for path in paths {
+        if !unique_paths.iter().any(|existing| existing == &path) {
+            unique_paths.push(path);
+        }
+    }
+    unique_paths
+}
+
+fn augmented_command_path_value() -> String {
+    env::join_paths(command_search_paths())
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string()
 }
 
 fn summarize_error(error: &str) -> String {
@@ -2021,6 +2170,22 @@ fn summarize_error(error: &str) -> String {
         summary.push_str("...");
     }
     summary
+}
+
+fn summarize_process_output(stdout: &str, stderr: &str) -> String {
+    let mut parts = Vec::new();
+    let stdout = stdout.trim();
+    let stderr = stderr.trim();
+    if !stderr.is_empty() {
+        parts.push(format!("stderr: {}", stderr));
+    }
+    if !stdout.is_empty() {
+        parts.push(format!("stdout: {}", stdout));
+    }
+    if parts.is_empty() {
+        return "no output".to_string();
+    }
+    summarize_error(&parts.join(" "))
 }
 
 fn sanitize_title(value: &str) -> String {
@@ -2373,7 +2538,7 @@ mod tests {
         .expect("source json");
         let request = CreatePackageFromSourcesRequest {
             project_root_id: "project_root-test".to_string(),
-            source_paths: vec!["research-notes".to_string()],
+            source_paths: vec![format!("\"{}\"", source_dir.display())],
             prompt: Some(
                 "Create a skill for turning research notes into insight cards.".to_string(),
             ),
@@ -2613,7 +2778,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_mode_falls_back_when_claude_cli_times_out() {
+    fn auto_mode_reports_claude_cli_failure_instead_of_using_template() {
         let root = make_temp_project_root("claude-timeout");
         let mock_bin = root.join("slow-claude.sh");
         filesystem::write_text_file(
@@ -2639,20 +2804,21 @@ mod tests {
             claude_timeout_secs: 1,
         };
 
-        let response = create_package_in_workspace_with_options(
+        let error = create_package_in_workspace_with_options(
             &root,
             "project_root-test",
             &request,
             &options,
         )
-        .expect("fallback package created");
+        .expect_err("configured Claude failure should be surfaced");
 
-        assert_eq!(response.generator_used, CREATOR_FALLBACK);
-        assert!(response.generation_summary.contains("timed out"));
+        assert!(error.contains("Claude CLI draft generation failed"));
+        assert!(error.contains("timed out"));
         assert!(filesystem::canonical_skills_root(&root)
-            .join(&response.slug)
-            .join("SKILL.md")
-            .exists());
+            .read_dir()
+            .expect("skills dir exists")
+            .next()
+            .is_none());
 
         fs::remove_dir_all(root).ok();
     }
@@ -2761,5 +2927,7 @@ mod tests {
         assert!(status.get("preferredGenerator").is_some());
         assert!(status.get("fallbackGenerator").is_some());
         assert!(status.get("claudeTimeoutSecs").is_some());
+        assert!(status.get("claudeResolvedPath").is_some());
+        assert!(status.get("skillCreateResolvedPath").is_some());
     }
 }

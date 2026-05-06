@@ -166,6 +166,8 @@ export interface CreationBridgeStatus {
   claudeCliAvailable: boolean;
   skillCreateCommandAvailable: boolean;
   claudeBinary: string;
+  claudeResolvedPath?: string | null;
+  skillCreateResolvedPath?: string | null;
   claudeModel?: string | null;
   claudeTimeoutSecs: number;
   fallbackGenerator: string;

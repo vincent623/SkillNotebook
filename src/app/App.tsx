@@ -253,16 +253,20 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="app-topbar">
-        <div className="topbar-left">
+        <div className="topbar-left" data-tauri-drag-region>
           <button
             className="topbar-brand"
             onClick={() => requestScreen("explorer")}
+            aria-label="打开 Skill Notebook 工作台"
             type="button"
           >
-            <span className="topbar-brand-mark">技</span>
-            <span>技能本</span>
+            <span className="topbar-brand-mark" aria-hidden="true" />
+            <span className="topbar-brand-copy">
+              <strong>Skill Notebook</strong>
+              <small>技能本</small>
+            </span>
           </button>
-          <div className="topbar-project" title={projectRootPath}>
+          <div className="topbar-project" data-tauri-drag-region title={projectRootPath}>
             <span>
               <i className={`status-led status-led-${status}`} />
               {statusLabel}
@@ -270,7 +274,7 @@ export default function App() {
             <strong>{projectRootPath}</strong>
           </div>
           {selectedPackage ? (
-            <div className="topbar-breadcrumb" title={selectedPackage.rootPath}>
+            <div className="topbar-breadcrumb" data-tauri-drag-region title={selectedPackage.rootPath}>
               <span>›</span>
               <code>{selectedPackage.slug}/</code>
               <code className="topbar-version-pill">v{selectedPackage.currentVersion}</code>

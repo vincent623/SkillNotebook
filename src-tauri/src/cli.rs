@@ -4,10 +4,13 @@ use std::process;
 
 use serde_json::{json, Value};
 
-use crate::domain::package::{CreatePackageFromNlRequest, PackageStatus};
+use crate::domain::package::{
+    CommitPackagePreviewRequest, CreatePackageFromNlRequest, CreatePackageFromSourcesRequest,
+    CreatePackageFromUrlRequest, DiscardPackagePreviewRequest, PackageStatus,
+};
 use crate::services::{
-    eval_service, package_service, search_service, skill_create_service, test_service,
-    version_service,
+    eval_service, export_service, package_service, search_service, skill_create_service,
+    test_service, version_service,
 };
 use crate::storage::filesystem;
 
@@ -20,20 +23,49 @@ pub struct SkillCli {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SkillCommand {
-    Find {
-        query: Option<String>,
-    },
-    Create {
+    Doctor(DoctorCommand),
+    Find { query: Option<String> },
+    Create(CreateCommand),
+    Eval { package_id: String },
+    Test { package_id: String },
+    Export(ExportCommand),
+    Version(VersionCommand),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DoctorCommand {
+    Generator,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CreateCommand {
+    Direct {
         prompt: String,
         context: Option<String>,
     },
-    Eval {
-        package_id: String,
+    Preview {
+        source: CreatePreviewSource,
+        prompt: Option<String>,
+        context: Option<String>,
     },
-    Test {
-        package_id: String,
+    Commit {
+        preview_id: String,
     },
-    Version(VersionCommand),
+    Discard {
+        preview_id: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CreatePreviewSource {
+    Text,
+    Files { source_paths: Vec<String> },
+    Url { url: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExportCommand {
+    Zip { package_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,6 +185,19 @@ where
     }
 
     let command = match argv[index].as_str() {
+        "doctor" => {
+            let target = argv
+                .get(index + 1)
+                .map(String::as_str)
+                .ok_or_else(|| "doctor requires a target: generator".to_string())?;
+            if argv.len() > index + 2 {
+                return Err("doctor accepts exactly one target".to_string());
+            }
+            match target {
+                "generator" => SkillCommand::Doctor(DoctorCommand::Generator),
+                other => return Err(format!("unknown doctor target: {}", other)),
+            }
+        }
         "find" => {
             let query = argv.get(index + 1).cloned();
             if argv.len() > index + 2 {
@@ -161,29 +206,137 @@ where
             SkillCommand::Find { query }
         }
         "create" => {
-            let prompt = argv
+            let action = argv
                 .get(index + 1)
                 .cloned()
                 .ok_or_else(|| "create requires a prompt".to_string())?;
-            let mut context = None;
-            let mut cursor = index + 2;
 
-            while cursor < argv.len() {
-                match argv[cursor].as_str() {
-                    "--context" => {
-                        cursor += 1;
-                        context = Some(
-                            argv.get(cursor)
-                                .cloned()
-                                .ok_or_else(|| "--context requires a value".to_string())?,
-                        );
-                        cursor += 1;
+            match action.as_str() {
+                "preview" => {
+                    let mut prompt = None;
+                    let mut context = None;
+                    let mut source_paths = Vec::new();
+                    let mut url = None;
+                    let mut cursor = index + 2;
+
+                    while cursor < argv.len() {
+                        match argv[cursor].as_str() {
+                            "--prompt" => {
+                                cursor += 1;
+                                prompt = Some(
+                                    argv.get(cursor)
+                                        .cloned()
+                                        .ok_or_else(|| "--prompt requires a value".to_string())?,
+                                );
+                                cursor += 1;
+                            }
+                            "--context" => {
+                                cursor += 1;
+                                context = Some(
+                                    argv.get(cursor)
+                                        .cloned()
+                                        .ok_or_else(|| "--context requires a value".to_string())?,
+                                );
+                                cursor += 1;
+                            }
+                            "--from-file" | "--from-path" => {
+                                cursor += 1;
+                                source_paths.push(
+                                    argv.get(cursor)
+                                        .cloned()
+                                        .ok_or_else(|| "--from-file requires a path".to_string())?,
+                                );
+                                cursor += 1;
+                            }
+                            "--from-url" => {
+                                cursor += 1;
+                                url = Some(
+                                    argv.get(cursor)
+                                        .cloned()
+                                        .ok_or_else(|| "--from-url requires a URL".to_string())?,
+                                );
+                                cursor += 1;
+                            }
+                            value => {
+                                return Err(format!("unknown create preview argument: {}", value))
+                            }
+                        }
                     }
-                    value => return Err(format!("unknown create argument: {}", value)),
+
+                    let source = match (source_paths.is_empty(), url) {
+                        (false, Some(_)) => {
+                            return Err(
+                                "create preview accepts either --from-file/--from-path or --from-url, not both"
+                                    .to_string(),
+                            )
+                        }
+                        (false, None) => CreatePreviewSource::Files { source_paths },
+                        (true, Some(url)) => CreatePreviewSource::Url { url },
+                        (true, None) => {
+                            if prompt
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|value| !value.is_empty())
+                                .is_none()
+                            {
+                                return Err(
+                                    "create preview requires --prompt when no source path or URL is provided"
+                                        .to_string(),
+                                );
+                            }
+                            CreatePreviewSource::Text
+                        }
+                    };
+
+                    SkillCommand::Create(CreateCommand::Preview {
+                        source,
+                        prompt,
+                        context,
+                    })
+                }
+                "commit" => {
+                    let preview_id = argv
+                        .get(index + 2)
+                        .cloned()
+                        .ok_or_else(|| "create commit requires a preview id".to_string())?;
+                    if argv.len() > index + 3 {
+                        return Err("create commit accepts exactly one preview id".to_string());
+                    }
+                    SkillCommand::Create(CreateCommand::Commit { preview_id })
+                }
+                "discard" => {
+                    let preview_id = argv
+                        .get(index + 2)
+                        .cloned()
+                        .ok_or_else(|| "create discard requires a preview id".to_string())?;
+                    if argv.len() > index + 3 {
+                        return Err("create discard accepts exactly one preview id".to_string());
+                    }
+                    SkillCommand::Create(CreateCommand::Discard { preview_id })
+                }
+                _ => {
+                    let prompt = action;
+                    let mut context = None;
+                    let mut cursor = index + 2;
+
+                    while cursor < argv.len() {
+                        match argv[cursor].as_str() {
+                            "--context" => {
+                                cursor += 1;
+                                context = Some(
+                                    argv.get(cursor)
+                                        .cloned()
+                                        .ok_or_else(|| "--context requires a value".to_string())?,
+                                );
+                                cursor += 1;
+                            }
+                            value => return Err(format!("unknown create argument: {}", value)),
+                        }
+                    }
+
+                    SkillCommand::Create(CreateCommand::Direct { prompt, context })
                 }
             }
-
-            SkillCommand::Create { prompt, context }
         }
         "eval" => {
             let package_id = argv
@@ -204,6 +357,25 @@ where
                 return Err("test accepts exactly one package id".to_string());
             }
             SkillCommand::Test { package_id }
+        }
+        "export" => {
+            let action = argv
+                .get(index + 1)
+                .map(String::as_str)
+                .ok_or_else(|| "export requires a subcommand: zip".to_string())?;
+            match action {
+                "zip" => {
+                    let package_id = argv
+                        .get(index + 2)
+                        .cloned()
+                        .ok_or_else(|| "export zip requires a package id".to_string())?;
+                    if argv.len() > index + 3 {
+                        return Err("export zip accepts exactly one package id".to_string());
+                    }
+                    SkillCommand::Export(ExportCommand::Zip { package_id })
+                }
+                other => return Err(format!("unknown export subcommand: {}", other)),
+            }
         }
         "version" => {
             let action = argv.get(index + 1).map(String::as_str).ok_or_else(|| {
@@ -287,10 +459,17 @@ fn help_text(program: &str) -> String {
 Skill Notebook core CLI
 
 Usage:
+  {program} [--project_root PATH] [--json] doctor generator
   {program} [--project_root PATH] [--json] find [query]
   {program} [--project_root PATH] [--json] create <prompt> [--context <text>]
+  {program} [--project_root PATH] [--json] create preview --prompt <text> [--context <text>]
+  {program} [--project_root PATH] [--json] create preview --from-file <path> [--from-file <path>...] [--prompt <text>] [--context <text>]
+  {program} [--project_root PATH] [--json] create preview --from-url <url> [--prompt <text>] [--context <text>]
+  {program} [--project_root PATH] [--json] create commit <preview-id>
+  {program} [--project_root PATH] [--json] create discard <preview-id>
   {program} [--project_root PATH] [--json] eval <package-id>
   {program} [--project_root PATH] [--json] test <package-id>
+  {program} [--project_root PATH] [--json] export zip <package-id>
   {program} [--project_root PATH] [--json] version list <package-id>
   {program} [--project_root PATH] [--json] version save <package-id> [--note <text>]
   {program} [--project_root PATH] [--json] version diff <version-id>
@@ -311,6 +490,51 @@ fn execute(cli: &SkillCli) -> Result<RenderedOutput, String> {
     let project_root = scanned.project_root;
 
     match &cli.command {
+        SkillCommand::Doctor(DoctorCommand::Generator) => {
+            let status = skill_create_service::creator_bridge_status();
+            let preferred = status
+                .get("preferredGenerator")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let claude_available = status
+                .get("claudeCliAvailable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let skill_create_available = status
+                .get("skillCreateCommandAvailable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let claude_timeout = status
+                .get("claudeTimeoutSecs")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let mut human = format!(
+                "Generator doctor for {}\nPreferred: {}\nClaude CLI: {}\nskill-create: {}\nClaude timeout: {}s",
+                project_root.root_path,
+                preferred,
+                if claude_available { "available" } else { "unavailable" },
+                if skill_create_available { "available" } else { "unavailable" },
+                claude_timeout
+            );
+            if let Some(path) = status.get("claudeResolvedPath").and_then(Value::as_str) {
+                let _ = write!(human, "\nClaude path: {}", path);
+            }
+            if let Some(path) = status
+                .get("skillCreateResolvedPath")
+                .and_then(Value::as_str)
+            {
+                let _ = write!(human, "\nskill-create path: {}", path);
+            }
+
+            Ok(RenderedOutput {
+                human,
+                json: json!({
+                    "command": "doctor.generator",
+                    "project_root": project_root,
+                    "generator": status,
+                }),
+            })
+        }
         SkillCommand::Find { query } => {
             if let Some(query) = query
                 .as_deref()
@@ -381,32 +605,172 @@ fn execute(cli: &SkillCli) -> Result<RenderedOutput, String> {
                 })
             }
         }
-        SkillCommand::Create { prompt, context } => {
-            let req = CreatePackageFromNlRequest {
-                project_root_id: project_root.id.clone(),
-                prompt: prompt.clone(),
-                context: context.clone(),
-            };
-            let created = skill_create_service::create_package_from_nl(
-                &req,
-                Some(project_root.root_path.as_str()),
-            )?;
+        SkillCommand::Create(command) => match command {
+            CreateCommand::Direct { prompt, context } => {
+                let req = CreatePackageFromNlRequest {
+                    project_root_id: project_root.id.clone(),
+                    prompt: prompt.clone(),
+                    context: context.clone(),
+                };
+                let created = skill_create_service::create_package_from_nl(
+                    &req,
+                    Some(project_root.root_path.as_str()),
+                )?;
 
-            Ok(RenderedOutput {
-                human: format!(
-                    "Created {} at {}\nGenerator: {}\nValidation: {}",
-                    created.name,
-                    created.root_path,
-                    created.generator_used,
-                    created.validation_summary
-                ),
-                json: json!({
-                    "command": "create",
-                    "project_root": project_root,
-                    "result": created,
-                }),
-            })
-        }
+                Ok(RenderedOutput {
+                    human: format!(
+                        "Created {} at {}\nGenerator: {}\nValidation: {}",
+                        created.name,
+                        created.root_path,
+                        created.generator_used,
+                        created.validation_summary
+                    ),
+                    json: json!({
+                        "command": "create",
+                        "project_root": project_root,
+                        "result": created,
+                    }),
+                })
+            }
+            CreateCommand::Preview {
+                source,
+                prompt,
+                context,
+            } => {
+                let preview = match source {
+                    CreatePreviewSource::Text => {
+                        let req = CreatePackageFromNlRequest {
+                            project_root_id: project_root.id.clone(),
+                            prompt: prompt.clone().unwrap_or_default(),
+                            context: context.clone(),
+                        };
+                        skill_create_service::generate_package_preview_from_nl(
+                            &req,
+                            Some(project_root.root_path.as_str()),
+                        )?
+                    }
+                    CreatePreviewSource::Files { source_paths } => {
+                        let req = CreatePackageFromSourcesRequest {
+                            project_root_id: project_root.id.clone(),
+                            source_paths: source_paths.clone(),
+                            prompt: prompt.clone(),
+                            context: context.clone(),
+                        };
+                        skill_create_service::generate_package_preview_from_sources(
+                            &req,
+                            Some(project_root.root_path.as_str()),
+                        )?
+                    }
+                    CreatePreviewSource::Url { url } => {
+                        let req = CreatePackageFromUrlRequest {
+                            project_root_id: project_root.id.clone(),
+                            url: url.clone(),
+                            prompt: prompt.clone(),
+                            context: context.clone(),
+                        };
+                        skill_create_service::generate_package_preview_from_url(
+                            &req,
+                            Some(project_root.root_path.as_str()),
+                        )?
+                    }
+                };
+                let preview_id = preview.preview_id.clone();
+                let name = preview.name.clone();
+                let slug = preview.slug.clone();
+                let generator_used = preview.generator_used.clone();
+                let generation_summary = preview.generation_summary.clone();
+                let file_count = preview.files.len();
+                let commit_command = format!(
+                    "skill --project_root '{}' create commit {}",
+                    project_root.root_path, preview_id
+                );
+                Ok(RenderedOutput {
+                    human: format!(
+                        "Previewed {} ({})\nPreview id: {}\nGenerator: {}\nFiles: {}\nCommit with: skill --project_root '{}' create commit {}",
+                        name,
+                        slug,
+                        preview_id,
+                        generator_used,
+                        file_count,
+                        project_root.root_path,
+                        preview_id
+                    ),
+                    json: json!({
+                        "command": "create.preview",
+                        "project_root": project_root,
+                        "previewId": preview_id,
+                        "name": name,
+                        "slug": slug,
+                        "generatorUsed": generator_used,
+                        "generationSummary": generation_summary,
+                        "fileCount": file_count,
+                        "commitCommand": commit_command,
+                        "preview": preview,
+                    }),
+                })
+            }
+            CreateCommand::Commit { preview_id } => {
+                let req = CommitPackagePreviewRequest {
+                    project_root_id: project_root.id.clone(),
+                    preview_id: preview_id.clone(),
+                };
+                let created = skill_create_service::commit_package_preview(
+                    &req,
+                    Some(project_root.root_path.as_str()),
+                )?;
+                let package_id = created.package_id.clone();
+                let name = created.name.clone();
+                let slug = created.slug.clone();
+                let package_path = created.root_path.clone();
+                let generator_used = created.generator_used.clone();
+                Ok(RenderedOutput {
+                    human: format!(
+                        "Committed preview {} as {}\nPackage path: {}\nGenerator: {}",
+                        preview_id, name, package_path, generator_used
+                    ),
+                    json: json!({
+                        "command": "create.commit",
+                        "project_root": project_root,
+                        "previewId": preview_id,
+                        "packageId": package_id,
+                        "name": name,
+                        "slug": slug,
+                        "packagePath": package_path,
+                        "generatorUsed": generator_used,
+                        "result": created,
+                        "package": created,
+                    }),
+                })
+            }
+            CreateCommand::Discard { preview_id } => {
+                let req = DiscardPackagePreviewRequest {
+                    project_root_id: project_root.id.clone(),
+                    preview_id: preview_id.clone(),
+                };
+                let discarded = skill_create_service::discard_package_preview(
+                    &req,
+                    Some(project_root.root_path.as_str()),
+                )?;
+                Ok(RenderedOutput {
+                    human: format!(
+                        "{} preview {} in {}.",
+                        if discarded {
+                            "Discarded"
+                        } else {
+                            "Did not find"
+                        },
+                        preview_id,
+                        project_root.root_path
+                    ),
+                    json: json!({
+                        "command": "create.discard",
+                        "project_root": project_root,
+                        "previewId": preview_id,
+                        "discarded": discarded,
+                    }),
+                })
+            }
+        },
         SkillCommand::Eval { package_id } => {
             let report = eval_service::run_eval(package_id, Some(project_root.root_path.as_str()))?;
             let human = format!(
@@ -445,6 +809,28 @@ fn execute(cli: &SkillCli) -> Result<RenderedOutput, String> {
                     "command": "test",
                     "project_root": project_root,
                     "report": report,
+                }),
+            })
+        }
+        SkillCommand::Export(ExportCommand::Zip { package_id }) => {
+            let artifact = export_service::export_package_zip(
+                package_id,
+                Some(project_root.root_path.as_str()),
+            )?;
+            let zip_path = artifact.zip_path.clone();
+            let size_bytes = artifact.size_bytes;
+            Ok(RenderedOutput {
+                human: format!(
+                    "Exported {} to {}\nSize: {} bytes",
+                    package_id, artifact.zip_path, artifact.size_bytes
+                ),
+                json: json!({
+                    "command": "export.zip",
+                    "project_root": project_root,
+                    "packageId": package_id,
+                    "zipPath": zip_path,
+                    "sizeBytes": size_bytes,
+                    "artifact": artifact,
                 }),
             })
         }
@@ -600,7 +986,10 @@ fn diff_change_label(change: &crate::domain::version::VersionDiffChangeType) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{execute, parse_from, ParseOutcome, SkillCli, SkillCommand, VersionCommand};
+    use super::{
+        execute, parse_from, CreateCommand, CreatePreviewSource, DoctorCommand, ExportCommand,
+        ParseOutcome, SkillCli, SkillCommand, VersionCommand,
+    };
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -700,10 +1089,106 @@ mod tests {
             SkillCli {
                 project_root: Some("/tmp/demo".to_string()),
                 json: false,
-                command: SkillCommand::Create {
+                command: SkillCommand::Create(CreateCommand::Direct {
                     prompt: "draft a meeting skill".to_string(),
                     context: Some("output markdown".to_string()),
-                },
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parser_recognizes_doctor_generator() {
+        let cli = match parse_from(["skill", "--json", "doctor", "generator"])
+            .expect("parse doctor generator")
+        {
+            ParseOutcome::Run(cli) => cli,
+            ParseOutcome::Print(_) => panic!("expected runnable cli"),
+        };
+
+        assert_eq!(
+            cli,
+            SkillCli {
+                project_root: None,
+                json: true,
+                command: SkillCommand::Doctor(DoctorCommand::Generator),
+            }
+        );
+    }
+
+    #[test]
+    fn parser_recognizes_create_preview_from_file() {
+        let cli = match parse_from([
+            "skill",
+            "create",
+            "preview",
+            "--from-file",
+            "\"/tmp/source note.txt\"",
+            "--prompt",
+            "draft from notes",
+            "--context",
+            "keep citations",
+        ])
+        .expect("parse create preview")
+        {
+            ParseOutcome::Run(cli) => cli,
+            ParseOutcome::Print(_) => panic!("expected runnable cli"),
+        };
+
+        assert_eq!(
+            cli,
+            SkillCli {
+                project_root: None,
+                json: false,
+                command: SkillCommand::Create(CreateCommand::Preview {
+                    source: CreatePreviewSource::Files {
+                        source_paths: vec!["\"/tmp/source note.txt\"".to_string()],
+                    },
+                    prompt: Some("draft from notes".to_string()),
+                    context: Some("keep citations".to_string()),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parser_recognizes_create_commit() {
+        let cli = match parse_from(["skill", "create", "commit", "preview-demo"])
+            .expect("parse create commit")
+        {
+            ParseOutcome::Run(cli) => cli,
+            ParseOutcome::Print(_) => panic!("expected runnable cli"),
+        };
+
+        assert_eq!(
+            cli,
+            SkillCli {
+                project_root: None,
+                json: false,
+                command: SkillCommand::Create(CreateCommand::Commit {
+                    preview_id: "preview-demo".to_string(),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parser_recognizes_export_zip() {
+        let cli = match parse_from(["skill", "--json", "export", "zip", "pkg-pdf"])
+            .expect("parse export zip")
+        {
+            ParseOutcome::Run(cli) => cli,
+            ParseOutcome::Print(_) => panic!("expected runnable cli"),
+        };
+
+        assert_eq!(
+            cli,
+            SkillCli {
+                project_root: None,
+                json: true,
+                command: SkillCommand::Export(ExportCommand::Zip {
+                    package_id: "pkg-pdf".to_string(),
+                }),
             }
         );
     }

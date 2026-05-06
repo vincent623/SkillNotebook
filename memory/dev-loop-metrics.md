@@ -217,3 +217,16 @@
 | Local signing state | valid ad-hoc | Added `bundle.macOS.signingIdentity: "-"`; `codesign --verify --deep --strict --verbose=2` passes. |
 | Distribution signing state | not notarized | `spctl` rejects the ad-hoc signed app, as expected without Developer ID notarization credentials. |
 | Post-package lint scope | fixed | ESLint now ignores `target` and `src-tauri/target` so generated Tauri assets do not break `npm run lint`. |
+
+### CLI-First Alignment Pass
+
+| Metric | Value | Notes |
+| --- | --- | --- |
+| CLI generator diagnostics | implemented | Added `skill doctor generator` with preferred generator, resolved paths, availability, and Claude timeout. |
+| CLI preview lifecycle | implemented | Added `skill create preview`, `skill create commit`, and `skill create discard` for text, local source path, and URL-backed previews. |
+| CLI export | implemented | Added `skill export zip <package-id>` over the same sanitized native export service as the GUI. |
+| Local path paste tolerance | implemented | Local source preview accepts quoted paths, `file://` paths, and common shell-escaped path characters. |
+| Generator fallback policy | hardened | Detected generator failures now surface as errors instead of silently creating template fallback packages. |
+| Claude default timeout | 300s | Default increased from 60s for real source-material generation; override with `SKILL_NOTEBOOK_CLAUDE_TIMEOUT_SECS`. |
+| Script-ready CLI JSON | implemented | `create.preview`, `create.commit`, and `export.zip` now expose top-level lifecycle handles while keeping full nested objects. |
+| CLI-first validation | green | `skill doctor generator`, quoted local-path `skill create preview --from-file`, `skill create commit`, `skill create discard`, and `skill export zip` pass as one command chain against a temporary project root. |

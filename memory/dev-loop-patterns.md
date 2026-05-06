@@ -229,3 +229,29 @@
 
 - Export artifacts should exclude internal notebook metadata and hidden files unless the product explicitly offers a diagnostic export.
 - Put generated archives under the active project root, so users can inspect and share the artifact without guessing where the app wrote it.
+
+## 2026-05-06
+
+### CLI-First Means GUI Features Need A Scriptable Contract
+
+- Treat the `skill` CLI as the primary product contract for local-first workflows; GUI actions should be thin affordances over the same Rust service behavior.
+- A capability is not complete if it only exists as a Tauri command or React button; add CLI coverage for preview, commit, discard, export, and generator diagnostics.
+- Prefer CLI E2E checks for destructive or long-running workflows because they are easier to run against temporary project roots without contaminating design fixtures.
+
+### Generator Failures Must Not Become Template Successes
+
+- If Claude CLI or `skill-create` is detected and invoked, execution failure should surface as an error instead of silently falling back to a local template.
+- Local template fallback is acceptable only when explicitly selected or when no generator is available, and the UI/CLI must label it as structural draft output.
+- Capture both stdout and stderr from failed generator processes; some CLIs write actionable auth or permission errors to stdout even with non-zero exit codes.
+
+### Example Fixtures Are Not Acceptance Workspaces
+
+- Keep `examples/project-root` as a baseline fixture, not as the default target for destructive manual testing.
+- Real acceptance should copy fixtures to `/tmp` or another throwaway project root, then run CLI/GUI checks there.
+- Tests should assert required baseline packages exist rather than assuming the fixture will never gain extra packages during exploratory local use.
+
+### CLI JSON Needs Script-Ready Handles
+
+- Do not expose only frontend-shaped nested response objects from the CLI; shell users need stable top-level IDs, paths, counts, and next commands.
+- Keep nested objects for GUI/API parity, but duplicate lifecycle handles such as `previewId`, `packageId`, `slug`, `packagePath`, and `zipPath` at the top level.
+- Validate CLI contracts with a real command chain, not only parser tests, because field-shape issues appear when commands feed each other.

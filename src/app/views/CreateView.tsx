@@ -24,6 +24,27 @@ function normalizePath(path: string) {
   return path.replaceAll("\\", "/");
 }
 
+function normalizeSourcePathInput(path: string) {
+  let normalized = path.trim();
+  while (normalized.length >= 2) {
+    const first = normalized[0];
+    const last = normalized[normalized.length - 1];
+    if ((first === "\"" && last === "\"") || (first === "'" && last === "'")) {
+      normalized = normalized.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  if (normalized.startsWith("file://")) {
+    try {
+      normalized = decodeURI(normalized.replace(/^file:\/\//, ""));
+    } catch {
+      normalized = normalized.replace(/^file:\/\//, "");
+    }
+  }
+  return normalized.replace(/\\([\\ "'():])/g, "$1");
+}
+
 function isMarkdownFile(file: PackagePreviewFile | null) {
   return Boolean(file?.path.toLowerCase().endsWith(".md"));
 }
@@ -35,6 +56,50 @@ function getDefaultPreviewPath(preview: CreatePackagePreviewResponse) {
     preview.files[0]?.path ??
     null
   );
+}
+
+function getGeneratorInfo(generatorUsed: string) {
+  switch (generatorUsed) {
+    case "skill_create_cli":
+      return {
+        label: "skill-create",
+        tone: "native",
+        title: "由 skill-create 生成",
+        description: "已调用本机 skill-create 命令，并把结果写入临时预览目录。",
+      };
+    case "claude_cli":
+      return {
+        label: "Claude CLI",
+        tone: "native",
+        title: "由 Claude CLI 生成",
+        description: "已调用本机 Claude CLI，并把结果写入临时预览目录。",
+      };
+    case "template_fallback":
+      return {
+        label: "本地模板",
+        tone: "fallback",
+        title: "本地模板草稿",
+        description: "本次没有调用 Claude 或 skill-create。这个草稿只适合检查结构，需要配置生成器后再生成正式内容。",
+      };
+    default:
+      return {
+        label: generatorUsed || "未知生成器",
+        tone: "neutral",
+        title: "生成器已返回预览",
+        description: "结果已写入临时预览目录，保存前可以逐文件检查。",
+      };
+  }
+}
+
+function formatCreatedAt(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function discardPreviewQuietly(preview: CreatePackagePreviewResponse) {
@@ -68,11 +133,12 @@ export function CreateView() {
     const selectedPath = normalizePath(selectedPreviewPath);
     return preview.files.find((file) => normalizePath(file.path) === selectedPath) ?? null;
   }, [preview, selectedPreviewPath]);
+  const generatorInfo = preview ? getGeneratorInfo(preview.generatorUsed) : null;
 
   const isGenerating = status === "generating";
   const isCommitting = status === "committing";
   const sourcePathList = useMemo(
-    () => sourcePaths.split(/\r?\n/).map((path) => path.trim()).filter(Boolean),
+    () => sourcePaths.split(/\r?\n/).map(normalizeSourcePathInput).filter(Boolean),
     [sourcePaths],
   );
   const canGenerate = Boolean(
@@ -347,11 +413,33 @@ export function CreateView() {
                     <dd>{preview.slug}</dd>
                   </div>
                   <div>
-                    <dt>generator</dt>
-                    <dd>{preview.generatorUsed}</dd>
+                    <dt>生成器</dt>
+                    <dd>
+                      <span className={`create-generator-pill create-generator-${generatorInfo?.tone ?? "neutral"}`}>
+                        {generatorInfo?.label}
+                      </span>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>文件</dt>
+                    <dd>{preview.files.length} 个</dd>
                   </div>
                 </dl>
               </header>
+              <section className={`create-generation-evidence create-generation-${generatorInfo?.tone ?? "neutral"}`}>
+                <div className="create-generation-copy">
+                  <span className="field-label">Generation trace</span>
+                  <strong>{generatorInfo?.title}</strong>
+                  <p>{generatorInfo?.description}</p>
+                  <p>{preview.generationSummary}</p>
+                </div>
+                <div className="create-generation-facts">
+                  <span>preview</span>
+                  <code>{preview.previewId}</code>
+                  <span>created</span>
+                  <code>{formatCreatedAt(preview.createdAt)}</code>
+                </div>
+              </section>
               <div className="create-preview-layout">
                 <div className="create-preview-browser">
                   <FileColumnBrowser
@@ -390,6 +478,17 @@ export function CreateView() {
                 </div>
               </div>
             </>
+          ) : isGenerating ? (
+            <div className="create-preview-empty is-large create-generation-state">
+              <div className="create-generation-spinner" aria-hidden="true" />
+              <strong>正在创建预览工作区</strong>
+              <span>会调用可用生成器，写入临时文件，然后让你逐文件检查。</span>
+              <div className="create-generation-steps" aria-label="生成步骤">
+                <span>准备输入</span>
+                <span>调用生成器</span>
+                <span>写入预览文件</span>
+              </div>
+            </div>
           ) : (
             <div className="create-preview-empty is-large">
               <strong>等待预览</strong>

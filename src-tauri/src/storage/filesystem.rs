@@ -627,7 +627,18 @@ mod tests {
         let scanned = scan_project_root(None).expect("default project_root should scan");
 
         assert_eq!(scanned.project_root.id, "project-root-main");
-        assert_eq!(scanned.packages.len(), 3);
+        assert!(scanned
+            .packages
+            .iter()
+            .any(|package| package.id == "pkg-interview"));
+        assert!(scanned
+            .packages
+            .iter()
+            .any(|package| package.id == "pkg-meeting"));
+        assert!(scanned
+            .packages
+            .iter()
+            .any(|package| package.id == "pkg-pdf"));
         assert!(scanned
             .previews
             .iter()

@@ -166,7 +166,26 @@ export function SettingsPage() {
               </div>
               <div>
                 <dt>Claude CLI</dt>
-                <dd>{settings.creationBridge.claudeCliAvailable ? "可用" : "不可用"}</dd>
+                <dd>
+                  {settings.creationBridge.claudeCliAvailable ? "可用" : "不可用"}
+                  {settings.creationBridge.claudeResolvedPath ? (
+                    <code className="settings-bridge-path">{settings.creationBridge.claudeResolvedPath}</code>
+                  ) : null}
+                </dd>
+              </div>
+              <div>
+                <dt>skill-create 路径</dt>
+                <dd>
+                  {settings.creationBridge.skillCreateResolvedPath ? (
+                    <code className="settings-bridge-path">{settings.creationBridge.skillCreateResolvedPath}</code>
+                  ) : (
+                    "未解析"
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Claude 超时</dt>
+                <dd>{settings.creationBridge.claudeTimeoutSecs}s</dd>
               </div>
               <div>
                 <dt>技能目录</dt>

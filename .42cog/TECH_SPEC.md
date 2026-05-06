@@ -111,11 +111,21 @@ src-tauri/src/
 ## V1 Command Surface
 
 - CLI:
+  - `skill doctor generator`
   - `skill find`
   - `skill create`
+  - `skill create preview`
+  - `skill create commit`
+  - `skill create discard`
   - `skill eval`
   - `skill test`
+  - `skill export zip`
   - `skill version`
+- CLI JSON output must expose script-ready top-level handles for lifecycle commands:
+  - `create.preview`: `previewId`, `slug`, `generatorUsed`, `fileCount`, `commitCommand`
+  - `create.commit`: `previewId`, `packageId`, `slug`, `packagePath`, `generatorUsed`
+  - `export.zip`: `packageId`, `zipPath`, `sizeBytes`
+  - full nested objects remain available for GUI/API parity
 - `app_bootstrap`
 - `project_root_open`
 - `project_root_create`

@@ -245,7 +245,7 @@ function cloneSettings(): AppSettings {
       skillCreateCommandAvailable: false,
       claudeBinary: "claude",
       claudeModel: null,
-      claudeTimeoutSecs: 60,
+      claudeTimeoutSecs: 300,
       fallbackGenerator: "template_fallback",
     },
   };

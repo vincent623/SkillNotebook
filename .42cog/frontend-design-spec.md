@@ -45,6 +45,7 @@ It should not feel like:
 | Versions are deliberate | Saving a formal version must feel more significant than editing a file. |
 | Eval is visible | Eval status and suggestions must be visible before version save. |
 | Local paths matter | Project root and package paths are first-class UI information. |
+| CLI first | Core workflows must be available through `skill` CLI before the GUI treats them as complete. |
 | Chinese UI | User-facing copy is Chinese; paths, commands, code identifiers, and file names remain literal. |
 | No fake power | Prototype-only abilities must be disabled, marked as planned, or backed by real commands. |
 
