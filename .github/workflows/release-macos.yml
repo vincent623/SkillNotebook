@@ -214,6 +214,9 @@ jobs:
       RELEASE_DRAFT_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
       RELEASE_PRERELEASE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download packaged artifacts
         uses: actions/download-artifact@v4
         with:
