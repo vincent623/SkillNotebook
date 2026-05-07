@@ -127,7 +127,27 @@ jobs:
           fi
 
       - name: Build Tauri bundle
-        run: npm run tauri:build -- --target ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+
+          for name in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_ID \
+            APPLE_PASSWORD \
+            APPLE_TEAM_ID \
+            APPLE_API_KEY \
+            APPLE_API_ISSUER \
+            APPLE_API_PRIVATE_KEY \
+            APPLE_API_KEY_PATH
+          do
+            if [ -z "${!name:-}" ]; then
+              unset "$name"
+            fi
+          done
+
+          export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:-"-"}"
+          npm run tauri:build -- --target ${{ matrix.target }}
 
       - name: Verify and collect macOS artifacts
         run: |

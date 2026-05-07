@@ -31,6 +31,11 @@ codesign --verify --deep --strict
 hdiutil verify
 ```
 
+Before invoking `tauri build`, the packaging job unsets empty Apple signing and
+notarization environment variables. This matters because an unset Developer ID
+secret should mean "use ad-hoc signing", while an empty `APPLE_CERTIFICATE`
+variable makes Tauri try to import an invalid certificate.
+
 ## Current Distribution Status
 
 The current package is ad-hoc signed. It is useful for internal testing and
