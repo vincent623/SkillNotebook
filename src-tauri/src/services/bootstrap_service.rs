@@ -1,13 +1,9 @@
 use crate::domain::common::AppBootstrap;
 use crate::domain::package::PackageStatus;
-use crate::services::skill_create_service;
 use crate::storage::filesystem;
 
 pub fn build_bootstrap(root_path: Option<&str>) -> Result<AppBootstrap, String> {
     let scanned = filesystem::scan_project_root(root_path)?;
-    let cleaned_previews =
-        skill_create_service::cleanup_stale_package_previews(&scanned.project_root.root_path)
-            .unwrap_or_default();
     let needs_eval_count = scanned
         .packages
         .iter()
@@ -31,13 +27,6 @@ pub fn build_bootstrap(root_path: Option<&str>) -> Result<AppBootstrap, String> 
             needs_eval_count
         ));
     }
-    if cleaned_previews > 0 {
-        activity_log.push(format!(
-            "Removed {} stale create preview workspace(s).",
-            cleaned_previews
-        ));
-    }
-
     Ok(AppBootstrap {
         selected_package_id: scanned.packages.first().map(|item| item.id.clone()),
         project_root: scanned.project_root,

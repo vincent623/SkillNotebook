@@ -35,9 +35,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": [
-      "../dist-sidecars/pi-skill-draft.mjs"
-    ],
     "macOS": {
       "signingIdentity": "-"
     },

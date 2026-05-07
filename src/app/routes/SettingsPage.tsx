@@ -8,24 +8,20 @@ export function SettingsPage() {
   const bootstrap = useProjectStore((state) => state.bootstrap);
   const loadBootstrap = useProjectStore((state) => state.loadBootstrap);
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [projectRootPath, setWorkspacePath] = useState("");
-  const [projectRootError, setWorkspaceError] = useState<string | null>(null);
-  const [projectRootSuccess, setWorkspaceSuccess] = useState<string | null>(null);
+  const [projectRootPath, setProjectRootPath] = useState("");
+  const [projectRootError, setProjectRootError] = useState<string | null>(null);
+  const [projectRootSuccess, setProjectRootSuccess] = useState<string | null>(null);
   const [isSwitching, setIsSwitching] = useState(false);
   const [newProjectRootName, setNewProjectRootName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
-  const [runtimeMode, setRuntimeMode] = useState("auto");
-  const [agentProvider, setAgentProvider] = useState("openai-compatible");
-  const [agentBaseUrl, setAgentBaseUrl] = useState("");
-  const [agentApiKey, setAgentApiKey] = useState("");
-  const [agentModel, setAgentModel] = useState("");
-  const [agentNodeBinary, setAgentNodeBinary] = useState("node");
-  const [agentSidecarScript, setAgentSidecarScript] = useState("");
-  const [agentTimeoutSecs, setAgentTimeoutSecs] = useState("300");
-  const [agentRetryAttempts, setAgentRetryAttempts] = useState("3");
-  const [agentConfigError, setAgentConfigError] = useState<string | null>(null);
-  const [agentConfigSuccess, setAgentConfigSuccess] = useState<string | null>(null);
-  const [isSavingAgentConfig, setIsSavingAgentConfig] = useState(false);
+  const [terminalCommand, setTerminalCommand] = useState("open -a Terminal");
+  const [editorCommand, setEditorCommand] = useState("");
+  const [agentCommand, setAgentCommand] = useState("codex");
+  const [globalClaudeSkillsDir, setGlobalClaudeSkillsDir] = useState("~/.claude/skills");
+  const [projectClaudeSkillsDirName, setProjectClaudeSkillsDirName] = useState(".claude/skills");
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const [handoffSuccess, setHandoffSuccess] = useState<string | null>(null);
+  const [isSavingHandoff, setIsSavingHandoff] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -34,43 +30,38 @@ export function SettingsPage() {
         const next = await getSettings();
         if (cancelled) return;
         setSettings(next);
-        populateAgentForm(next);
-        setWorkspacePath(next.currentProjectRoot || (bootstrap?.projectRoot.rootPath ?? ""));
+        populateHandoffForm(next);
+        setProjectRootPath(next.currentProjectRoot || (bootstrap?.projectRoot.rootPath ?? ""));
       } catch (error) {
-        if (!cancelled) setWorkspaceError(error instanceof Error ? error.message : "加载设置失败");
+        if (!cancelled) setProjectRootError(error instanceof Error ? error.message : "加载设置失败");
       }
     }
     void load();
     return () => { cancelled = true; };
   }, [bootstrap?.projectRoot.rootPath]);
 
-  function populateAgentForm(next: AppSettings) {
-    const bridge = next.creationBridge;
-    setRuntimeMode(bridge.mode || "auto");
-    setAgentProvider(bridge.agentProvider || "openai-compatible");
-    setAgentBaseUrl(bridge.agentBaseUrl ?? "");
-    setAgentApiKey("");
-    setAgentModel(bridge.agentModel ?? "");
-    setAgentNodeBinary(bridge.piNodeBinary || "node");
-    setAgentSidecarScript(bridge.piSidecarScript ?? "");
-    setAgentTimeoutSecs(String(bridge.agentTimeoutSecs || 300));
-    setAgentRetryAttempts(String(bridge.agentRetryAttempts || 3));
+  function populateHandoffForm(next: AppSettings) {
+    setTerminalCommand(next.handoff.terminalCommand ?? "open -a Terminal");
+    setEditorCommand(next.handoff.editorCommand ?? "");
+    setAgentCommand(next.handoff.agentCommand ?? "codex");
+    setGlobalClaudeSkillsDir(next.handoff.globalClaudeSkillsDir ?? "~/.claude/skills");
+    setProjectClaudeSkillsDirName(next.handoff.projectClaudeSkillsDirName ?? ".claude/skills");
   }
 
   async function switchProjectRoot(path: string) {
     setIsSwitching(true);
-    setWorkspaceError(null);
-    setWorkspaceSuccess(null);
+    setProjectRootError(null);
+    setProjectRootSuccess(null);
     try {
       const projectRoot = await openProjectRoot(path.trim());
       await loadBootstrap();
       const next = await getSettings();
       setSettings(next);
-      populateAgentForm(next);
-      setWorkspacePath(projectRoot.rootPath);
-      setWorkspaceSuccess(`已切换到 ${projectRoot.rootPath}`);
+      populateHandoffForm(next);
+      setProjectRootPath(projectRoot.rootPath);
+      setProjectRootSuccess(`已切换到 ${projectRoot.rootPath}`);
     } catch (error) {
-      setWorkspaceError(error instanceof Error ? error.message : "切换失败");
+      setProjectRootError(error instanceof Error ? error.message : "切换失败");
     } finally {
       setIsSwitching(false);
     }
@@ -80,61 +71,45 @@ export function SettingsPage() {
     const name = newProjectRootName.trim();
     if (!name) return;
     setIsCreating(true);
-    setWorkspaceError(null);
-    setWorkspaceSuccess(null);
+    setProjectRootError(null);
+    setProjectRootSuccess(null);
     try {
       const projectRoot = await createProjectRoot(name);
       await loadBootstrap();
       const next = await getSettings();
       setSettings(next);
-      populateAgentForm(next);
-      setWorkspacePath(projectRoot.rootPath);
+      populateHandoffForm(next);
+      setProjectRootPath(projectRoot.rootPath);
       setNewProjectRootName("");
-      setWorkspaceSuccess(`已创建并打开 ${projectRoot.rootPath}`);
+      setProjectRootSuccess(`已创建并打开 ${projectRoot.rootPath}`);
     } catch (error) {
-      setWorkspaceError(error instanceof Error ? error.message : "创建失败");
+      setProjectRootError(error instanceof Error ? error.message : "创建失败");
     } finally {
       setIsCreating(false);
     }
   }
 
-  async function saveAgentRuntimeConfig(clearApiKey = false) {
-    setIsSavingAgentConfig(true);
-    setAgentConfigError(null);
-    setAgentConfigSuccess(null);
+  async function saveHandoffConfig() {
+    setIsSavingHandoff(true);
+    setHandoffError(null);
+    setHandoffSuccess(null);
     try {
-      const timeoutSecs = Number.parseInt(agentTimeoutSecs, 10);
-      const retryAttempts = Number.parseInt(agentRetryAttempts, 10);
-      if (!Number.isFinite(timeoutSecs) || timeoutSecs <= 0) {
-        throw new Error("Agent 超时必须是大于 0 的秒数。");
-      }
-      if (!Number.isFinite(retryAttempts) || retryAttempts <= 0) {
-        throw new Error("Agent 重试次数必须大于 0。");
-      }
-
-      const apiKey = agentApiKey.trim();
-      const payload = {
-        agentRuntime: {
-          mode: runtimeMode,
-          provider: agentProvider,
-          baseUrl: agentBaseUrl,
-          model: agentModel,
-          nodeBinary: agentNodeBinary,
-          sidecarScript: agentSidecarScript,
-          timeoutSecs,
-          retryAttempts,
-          clearApiKey,
-          ...(apiKey ? { apiKey } : {}),
+      const next = await updateSettings({
+        handoff: {
+          terminalCommand: terminalCommand.trim() || null,
+          editorCommand: editorCommand.trim() || null,
+          agentCommand: agentCommand.trim() || null,
+          globalClaudeSkillsDir: globalClaudeSkillsDir.trim() || null,
+          projectClaudeSkillsDirName: projectClaudeSkillsDirName.trim() || null,
         },
-      };
-      const next = await updateSettings(payload);
+      });
       setSettings(next);
-      populateAgentForm(next);
-      setAgentConfigSuccess(clearApiKey ? "Agent API key 已清除。" : "Agent runtime 配置已保存并刷新。");
+      populateHandoffForm(next);
+      setHandoffSuccess("本地交接偏好已保存。");
     } catch (error) {
-      setAgentConfigError(error instanceof Error ? error.message : "保存 Agent runtime 配置失败");
+      setHandoffError(error instanceof Error ? error.message : "保存交接偏好失败");
     } finally {
-      setIsSavingAgentConfig(false);
+      setIsSavingHandoff(false);
     }
   }
 
@@ -148,13 +123,13 @@ export function SettingsPage() {
             <span className="field-label">仓库路径</span>
             <input
               className="detail-save-input"
-              onChange={(e) => setWorkspacePath(e.target.value)}
+              onChange={(e) => setProjectRootPath(e.target.value)}
               placeholder="/absolute/path/to/project-root"
               value={projectRootPath}
             />
           </label>
           <p className="muted" style={{ marginTop: 8 }}>
-            Skill Notebook 会固定从这个根目录下的 <span className="mono-text">.skills/</span> 读取和创建所有 skill。
+            Skill Notebook 会固定从这个根目录下的 <span className="mono-text">.skills/</span> 读取和管理所有 skill。
           </p>
           <div style={{ marginTop: 8 }}>
             <button
@@ -217,215 +192,81 @@ export function SettingsPage() {
         </div>
 
         <div className="content-card">
-          <h3>Agent Runtime 配置</h3>
+          <h3>本地交接偏好</h3>
           {settings ? (
             <>
               <div className="agent-config-grid" style={{ marginTop: 12 }}>
                 <label className="field-stack">
-                  <span className="field-label">运行时</span>
-                  <select
-                    className="detail-save-input"
-                    onChange={(e) => setRuntimeMode(e.target.value)}
-                    value={runtimeMode}
-                  >
-                    <option value="auto">auto</option>
-                    <option value="pi_sidecar">pi_sidecar</option>
-                    <option value="skill_create">skill_create</option>
-                    <option value="claude_cli">claude_cli</option>
-                    <option value="template">template</option>
-                  </select>
-                </label>
-                <label className="field-stack">
-                  <span className="field-label">Provider</span>
+                  <span className="field-label">Terminal command</span>
                   <input
                     className="detail-save-input"
-                    onChange={(e) => setAgentProvider(e.target.value)}
-                    placeholder="openai-compatible"
-                    value={agentProvider}
-                  />
-                </label>
-                <label className="field-stack agent-config-wide">
-                  <span className="field-label">Base URL</span>
-                  <input
-                    className="detail-save-input"
-                    onChange={(e) => setAgentBaseUrl(e.target.value)}
-                    placeholder="https://api.example.com/v1"
-                    value={agentBaseUrl}
+                    onChange={(e) => setTerminalCommand(e.target.value)}
+                    placeholder="open -a Terminal"
+                    value={terminalCommand}
                   />
                 </label>
                 <label className="field-stack">
-                  <span className="field-label">Model</span>
+                  <span className="field-label">Editor command</span>
                   <input
                     className="detail-save-input"
-                    onChange={(e) => setAgentModel(e.target.value)}
-                    placeholder="model-id"
-                    value={agentModel}
+                    onChange={(e) => setEditorCommand(e.target.value)}
+                    placeholder="code"
+                    value={editorCommand}
                   />
                 </label>
                 <label className="field-stack">
-                  <span className="field-label">API Key</span>
+                  <span className="field-label">External agent command</span>
                   <input
-                    autoComplete="off"
                     className="detail-save-input"
-                    onChange={(e) => setAgentApiKey(e.target.value)}
-                    placeholder={settings.creationBridge.agentApiKeyConfigured ? "已保存；留空则保留" : "粘贴 API key"}
-                    type="password"
-                    value={agentApiKey}
+                    onChange={(e) => setAgentCommand(e.target.value)}
+                    placeholder="codex"
+                    value={agentCommand}
                   />
                 </label>
                 <label className="field-stack">
-                  <span className="field-label">Node binary</span>
+                  <span className="field-label">Global Claude skills</span>
                   <input
                     className="detail-save-input"
-                    onChange={(e) => setAgentNodeBinary(e.target.value)}
-                    placeholder="node"
-                    value={agentNodeBinary}
+                    onChange={(e) => setGlobalClaudeSkillsDir(e.target.value)}
+                    placeholder="~/.claude/skills"
+                    value={globalClaudeSkillsDir}
                   />
                 </label>
                 <label className="field-stack">
-                  <span className="field-label">Sidecar script</span>
+                  <span className="field-label">Project Claude skills</span>
                   <input
                     className="detail-save-input"
-                    onChange={(e) => setAgentSidecarScript(e.target.value)}
-                    placeholder="留空使用内置 sidecar"
-                    value={agentSidecarScript}
-                  />
-                </label>
-                <label className="field-stack">
-                  <span className="field-label">Timeout seconds</span>
-                  <input
-                    className="detail-save-input"
-                    inputMode="numeric"
-                    onChange={(e) => setAgentTimeoutSecs(e.target.value)}
-                    value={agentTimeoutSecs}
-                  />
-                </label>
-                <label className="field-stack">
-                  <span className="field-label">Retry attempts</span>
-                  <input
-                    className="detail-save-input"
-                    inputMode="numeric"
-                    onChange={(e) => setAgentRetryAttempts(e.target.value)}
-                    value={agentRetryAttempts}
+                    onChange={(e) => setProjectClaudeSkillsDirName(e.target.value)}
+                    placeholder=".claude/skills"
+                    value={projectClaudeSkillsDirName}
                   />
                 </label>
               </div>
               <p className="muted" style={{ marginTop: 8 }}>
-                保存到 <span className="mono-text">{settings.settingsPath ?? "本机设置文件"}</span>。环境变量仍会覆盖这里的配置。
+                这些设置只影响草稿交接、快速引用和本地命令展示；Skill Notebook 不保存模型 API key。
               </p>
               <div className="settings-action-row">
                 <button
                   className="button-primary"
-                  disabled={isSavingAgentConfig}
-                  onClick={() => { void saveAgentRuntimeConfig(false); }}
+                  disabled={isSavingHandoff}
+                  onClick={() => { void saveHandoffConfig(); }}
                   type="button"
                 >
-                  {isSavingAgentConfig ? "保存中..." : "保存并检查"}
-                </button>
-                <button
-                  className="button-secondary"
-                  disabled={isSavingAgentConfig || !settings.creationBridge.agentApiKeyConfigured}
-                  onClick={() => { void saveAgentRuntimeConfig(true); }}
-                  type="button"
-                >
-                  清除 API key
+                  {isSavingHandoff ? "保存中..." : "保存交接偏好"}
                 </button>
               </div>
-              {agentConfigSuccess ? <div className="inline-banner inline-banner-success">{agentConfigSuccess}</div> : null}
-              {agentConfigError ? <div className="inline-banner inline-banner-error">{agentConfigError}</div> : null}
+              {handoffSuccess ? <div className="inline-banner inline-banner-success">{handoffSuccess}</div> : null}
+              {handoffError ? <div className="inline-banner inline-banner-error">{handoffError}</div> : null}
             </>
           ) : (
-            <p className="muted" style={{ marginTop: 8 }}>正在读取 Agent runtime 配置...</p>
+            <p className="muted" style={{ marginTop: 8 }}>正在读取本地交接偏好...</p>
           )}
         </div>
 
         <div className="content-card">
-          <h3>创建桥接状态</h3>
+          <h3>本地状态</h3>
           {settings ? (
             <dl className="settings-bridge-grid" style={{ marginTop: 12 }}>
-              <div>
-                <dt>模式</dt>
-                <dd>{settings.creationBridge.mode}</dd>
-              </div>
-              <div>
-                <dt>优先生成器</dt>
-                <dd>{settings.creationBridge.preferredGenerator}</dd>
-              </div>
-              <div>
-                <dt>Pi runtime</dt>
-                <dd>{settings.creationBridge.piSidecarAvailable ? "可用" : settings.creationBridge.piSidecarConfigured ? "配置未就绪" : "未配置"}</dd>
-              </div>
-              <div>
-                <dt>Agent provider</dt>
-                <dd>{settings.creationBridge.agentProvider}</dd>
-              </div>
-              <div>
-                <dt>Agent model</dt>
-                <dd>{settings.creationBridge.agentModel ?? "未配置"}</dd>
-              </div>
-              <div>
-                <dt>Agent API</dt>
-                <dd>
-                  Base URL {settings.creationBridge.agentBaseUrlConfigured ? "已配置" : "未配置"} · API key {settings.creationBridge.agentApiKeyConfigured ? "已配置" : "未配置"}
-                </dd>
-              </div>
-              <div>
-                <dt>Pi Node</dt>
-                <dd>
-                  {settings.creationBridge.piNodeResolvedPath ? (
-                    <code className="settings-bridge-path">{settings.creationBridge.piNodeResolvedPath}</code>
-                  ) : (
-                    `${settings.creationBridge.piNodeBinary} 未解析`
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Pi sidecar</dt>
-                <dd>
-                  {settings.creationBridge.piSidecarScriptPath ? (
-                    <code className="settings-bridge-path">{settings.creationBridge.piSidecarScriptPath}</code>
-                  ) : (
-                    "未找到脚本"
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Agent 超时</dt>
-                <dd>{settings.creationBridge.agentTimeoutSecs}s · 重试 {settings.creationBridge.agentRetryAttempts} 次</dd>
-              </div>
-              <div>
-                <dt>skill-create</dt>
-                <dd>{settings.creationBridge.skillCreateCommandAvailable ? "可用" : "不可用"}</dd>
-              </div>
-              <div>
-                <dt>Claude CLI</dt>
-                <dd>
-                  {settings.creationBridge.claudeCliAvailable ? "可用" : "不可用"}
-                  {settings.creationBridge.claudeResolvedPath ? (
-                    <code className="settings-bridge-path">{settings.creationBridge.claudeResolvedPath}</code>
-                  ) : null}
-                </dd>
-              </div>
-              <div>
-                <dt>skill-create 路径</dt>
-                <dd>
-                  {settings.creationBridge.skillCreateResolvedPath ? (
-                    <code className="settings-bridge-path">{settings.creationBridge.skillCreateResolvedPath}</code>
-                  ) : (
-                    "未解析"
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Claude 超时</dt>
-                <dd>{settings.creationBridge.claudeTimeoutSecs}s</dd>
-              </div>
-              <div>
-                <dt>Claude 重试</dt>
-                <dd>
-                  {settings.creationBridge.claudeRetryAttempts} 次 · 间隔 {settings.creationBridge.claudeRetryBackoffSecs}s
-                </dd>
-              </div>
               <div>
                 <dt>技能目录</dt>
                 <dd>{settings.skillRootName ?? ".skills"}</dd>
@@ -434,16 +275,28 @@ export function SettingsPage() {
                 <dt>正式版本上限</dt>
                 <dd>{settings.formalVersionCap}</dd>
               </div>
+              <div>
+                <dt>默认项目根目录</dt>
+                <dd><code className="settings-bridge-path">{settings.defaultProjectRoot}</code></dd>
+              </div>
+              <div>
+                <dt>设置文件</dt>
+                <dd>{settings.settingsPath ? <code className="settings-bridge-path">{settings.settingsPath}</code> : "未解析"}</dd>
+              </div>
+              <div>
+                <dt>Shell</dt>
+                <dd>{settings.shell.join(" / ")}</dd>
+              </div>
             </dl>
           ) : (
-            <p className="muted" style={{ marginTop: 8 }}>正在读取创建桥接状态...</p>
+            <p className="muted" style={{ marginTop: 8 }}>正在读取本地状态...</p>
           )}
         </div>
 
         <div className="content-card">
           <h3>关于</h3>
           <p className="body-copy" style={{ marginTop: 8 }}>
-            Skill Notebook v{import.meta.env.VITE_APP_VERSION} — macOS 本地优先的 skill 仓库与版本管理工具。
+            Skill Notebook v{import.meta.env.VITE_APP_VERSION} — macOS 本地优先的 skill 资产管理、评估、版本和快速引用工具。
           </p>
           <p className="muted" style={{ marginTop: 4 }}>
             Tauri 2 + Rust + React + TypeScript · Apple Silicon 适配

@@ -77,7 +77,7 @@ export function SkillLibraryColumn({
     <aside className="skill-library-column" aria-label="Skill Library">
       <div className="library-header">
         <h2>Skills · {bootstrap.packages.length}</h2>
-        <button className="library-create-btn" onClick={onCreate} title="生成 Skill" type="button">
+        <button className="library-import-btn" onClick={onCreate} title="导入 / 新建草稿" type="button">
           +
         </button>
       </div>

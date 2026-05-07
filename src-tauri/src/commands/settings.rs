@@ -1,7 +1,6 @@
 use crate::config::app_config;
 use crate::domain::common::AppResponse;
 use crate::services::project_root_service;
-use crate::services::skill_create_service;
 use crate::state::app_state::AppState;
 use crate::storage::filesystem;
 use serde_json::json;
@@ -21,7 +20,7 @@ pub async fn settings_update(
     payload: serde_json::Value,
     state: tauri::State<'_, AppState>,
 ) -> Result<AppResponse<serde_json::Value>, String> {
-    if let Err(error) = app_config::update_agent_runtime_from_payload(&payload) {
+    if let Err(error) = app_config::update_handoff_from_payload(&payload) {
         return Ok(AppResponse::failure("settings_update_failed", error));
     }
 
@@ -35,6 +34,7 @@ fn build_settings_payload(state: &AppState) -> Result<serde_json::Value, String>
     let current_project_root = state.current_project_root()?;
     let recent_project_roots =
         project_root_service::recent_project_roots(state.recent_project_roots()?)?;
+    let app_config = app_config::load_app_config();
 
     Ok(json!({
         "platform": "macOS",
@@ -46,6 +46,6 @@ fn build_settings_payload(state: &AppState) -> Result<serde_json::Value, String>
         "currentProjectRoot": current_project_root,
         "recentProjectRoots": recent_project_roots,
         "settingsPath": app_config::app_settings_path().map(|path| path.to_string_lossy().to_string()),
-        "creationBridge": skill_create_service::creator_bridge_status()
+        "handoff": app_config.handoff
     }))
 }

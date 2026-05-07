@@ -1,7 +1,7 @@
 # Skill Notebook Frontend Design Spec
 
 Status: canonical frontend specification
-Updated: 2026-04-28
+Updated: 2026-05-07
 
 This document is the production frontend design contract for Skill Notebook. It translates the runnable UI prototype in `docs/skillnotebook/` into implementable React/Tauri behavior backed by the Rust core.
 
@@ -19,7 +19,7 @@ Do not copy the prototype code wholesale into production. Use it as a visual and
 
 ## 1. Product Metaphor
 
-Skill Notebook is a local filesystem workbench for reusable agent skills.
+Skill Notebook is a local filesystem workbench for reusable agent skill assets.
 
 The user should feel they are looking at real folders and files, not cards in a dashboard. A skill package is a directory. `SKILL.md`, prompts, examples, references, scripts, tests, evals, and `notebook.json` are the durable local objects behind the interface.
 
@@ -28,6 +28,7 @@ The interface should feel like:
 - Finder for locating and drilling into package files.
 - A notebook editor for reading and writing skill material.
 - A light Git client for deliberate eval-backed formal versions.
+- A quick handoff surface for referencing a known-good skill in Claude, Codex, OpenClaw, or a shell.
 
 It should not feel like:
 
@@ -35,6 +36,7 @@ It should not feel like:
 - A SaaS admin dashboard.
 - A decorative landing page.
 - A prompt gallery.
+- An AI generation studio.
 
 ## 2. Core Frontend Principles
 
@@ -44,10 +46,11 @@ It should not feel like:
 | Editing is central | Reading, previewing, editing, and saving files are the daily loop. |
 | Versions are deliberate | Saving a formal version must feel more significant than editing a file. |
 | Eval is visible | Eval status and suggestions must be visible before version save. |
+| Reference is fast | Copying paths, snippets, link commands, and terminal handoff commands should be one or two actions away. |
 | Local paths matter | Project root and package paths are first-class UI information. |
 | CLI first | Core workflows must be available through `skill` CLI before the GUI treats them as complete. |
 | Chinese UI | User-facing copy is Chinese; paths, commands, code identifiers, and file names remain literal. |
-| No fake power | Prototype-only abilities must be disabled, marked as planned, or backed by real commands. |
+| No fake power | Prototype-only abilities must be disabled, marked as planned, or backed by real commands. The GUI must not pretend to generate skills through an unbacked model path. |
 
 ## 3. Design Baseline
 
@@ -58,6 +61,10 @@ The current runnable design baseline is:
 - `docs/skillnotebook/src/generator.jsx`
 - `docs/skillnotebook/src/store.js`
 
+This prototype remains the visual and interaction reference for the workbench. `library.jsx` is the primary reference for layout, density, navigation, editing, eval/version panels, and export/use modal behavior.
+
+`generator.jsx` is no longer a product-flow reference. It may be used only as a loose modal or stepper style reference. Do not preserve its "describe -> generate -> preview -> save" generation logic, AI generation progress, regeneration actions, or copy that implies Skill Notebook owns skill creation.
+
 Production should adopt these baseline ideas:
 
 - Finder-style package/file browsing.
@@ -65,15 +72,16 @@ Production should adopt these baseline ideas:
 - Command palette for quick open and primary actions.
 - Rich Markdown reading view with frontmatter summary.
 - Edit mode separate from preview mode.
-- Create wizard with generation progress and preview.
+- Draft/import flow for externally created candidate packages.
 - Version commit modal rather than casual inline saving.
-- Export/use modal for local Claude skill usage.
+- Quick reference/use modal for local Claude, Codex, OpenClaw, and shell usage.
 
 Production should not inherit these prototype traits:
 
 - `localStorage` as source of truth.
 - Inline styles as the production styling pattern.
 - Mock AI generation.
+- GUI-owned skill generation.
 - Mock local paths.
 - Browser-only zip/export behavior if a native implementation is available.
 
@@ -97,6 +105,7 @@ project-root/
       notebook.json
   .skill-notebook/
     config.json
+    drafts/
     snapshots/
     logs/
     cache/
@@ -111,23 +120,24 @@ Production should converge toward a single workbench surface:
 
 ```txt
 ┌────────────────────────────────────────────────────────────────┐
-│ Top Bar: brand / project root / search / create / settings      │
+│ Top Bar: brand / project root / search / draft/import / settings│
 ├───────────────┬───────────────────────────────┬────────────────┤
-│ Skill Library │ Package/File Browser Columns  │ Content Pane    │
-│ search/filter │ directories and files         │ preview/edit    │
+│ Skill Library │ Package/File Browser Columns  │ Content/Ref Pane│
+│ search/filter │ directories and files         │ preview/edit/use │
 └───────────────┴───────────────────────────────┴────────────────┘
 ```
 
 Auxiliary flows open as modals or focused overlays:
 
-- Create skill.
+- New draft workspace.
+- Import candidate package.
 - Command palette.
 - Save version.
 - Version diff.
-- Export/use.
+- Quick reference/use.
 - Settings.
 
-The current `ExplorerView`, `NotebookView`, `CreateView`, and `SettingsPage` may remain as intermediate migration surfaces, but they should not define the long-term user mental model.
+The current `ExplorerView`, `NotebookView`, `DraftImportView`, and `SettingsPage` may remain as intermediate migration surfaces, but they should not define the long-term user mental model.
 
 ## 5. Workbench Regions
 
@@ -139,12 +149,12 @@ Required elements:
 - Active project root path, truncated in the middle when needed.
 - Status indicator: loading, ready, error.
 - Command palette button with search icon and `⌘K` label.
-- Create button: `生成 Skill`.
+- Draft/import button: `新建草稿` or `导入`.
+- Quick reference button for the selected skill.
 - Settings icon button.
 
 Optional elements after core alignment:
 
-- Export/use button for selected skill.
 - Version save button for selected skill.
 - Eval status badge for selected skill.
 
@@ -246,58 +256,92 @@ Restore:
 - Must warn that package files will be overwritten.
 - Should close open editors or reload content after restore.
 
-## 6. Create Skill Flow
+### 5.6 Quick Reference And Use Surface
+
+Purpose: make the selected skill immediately usable in real local workflows.
+
+Required elements:
+
+- Absolute package path.
+- Absolute `SKILL.md` path.
+- Copyable Markdown reference snippet.
+- Copyable CLI/path reference snippet.
+- Command to symlink package into `~/.claude/skills/<slug>`.
+- Command to symlink package into `<project>/.claude/skills/<slug>`.
+- Open terminal at package root action.
+- Export sanitized zip action.
+
+Rules:
+
+- All paths and commands must be derived from real local paths.
+- Copy actions should provide clear saved/copied feedback.
+- Commands should be shown before execution; shell execution must be explicit.
+- Future Codex/OpenClaw link targets may be added when their local skill conventions are known.
+
+## 6. Draft And Import Flow
 
 ### 6.1 Target Flow
 
 ```txt
-Open create
-  -> choose input mode
-  -> provide source
-  -> generate
-  -> preview generated package
-  -> save to .skills/
-  -> open the new package in the workbench
+Open draft/import
+  -> choose draft or import mode
+  -> create a temporary draft workspace or select an existing candidate package
+  -> hand draft workspace to Claude/Codex/OpenClaw/shell when needed
+  -> inspect candidate package files
+  -> import to .skills/
+  -> run eval/test
+  -> optionally save a formal version
+  -> open quick reference actions
 ```
 
 ### 6.2 Input Modes
 
 | Mode | V1 Status | Notes |
 | --- | --- | --- |
-| Text description | Required | Backed by `package_generate_preview_from_nl` and `package_commit_preview`. |
-| Local files/directories | Supported | Backed by `package_generate_preview_from_sources`; uses local path inventory and UTF-8 text excerpts, records binary files as metadata only, then attaches `references/source-inventory.md`. |
-| URL | Supported | Backed by `package_generate_preview_from_url`; fetches bounded `http(s)` source text and attaches `references/url-source.md`. |
+| Existing skill folder | Required | Import an already-created package into `.skills/` after validation. |
+| Draft workspace | Required | Create `.skill-notebook/drafts/<draft-id>/` with `BRIEF.md`, skeleton files, and external-agent handoff commands. |
+| Local files/directories | Supported | Build a source inventory or draft references, then let the user hand the workspace to an external agent. |
+| URL | Supported | Capture bounded source text as draft reference material. |
+| Text description | Optional | Creates a `BRIEF.md` and skeleton, not a generated final skill. |
 
 ### 6.3 Current Backend Contract
 
-The production create flow must generate into a temporary preview workspace first, then commit only after user confirmation.
+The target production flow must create or import candidate package workspaces first, then commit into `.skills/` only after user confirmation.
 
-Implemented V1 commands:
+Target V1 commands:
 
-- `package_generate_preview_from_nl`: writes generated files under `.skill-notebook/create-previews/<preview-id>/package/` and returns file contents plus file tree.
-- `package_generate_preview_from_sources`: reads local file/directory paths, builds a bounded source inventory, generates a preview, and attaches `references/source-inventory.md`.
-- `package_generate_preview_from_url`: fetches bounded `http(s)` source text, generates a preview, and attaches `references/url-source.md`.
-- `package_commit_preview`: copies the preview package into `.skills/<slug>/`, writes notebook metadata, runs eval, removes the preview workspace, and opens the new package after bootstrap refresh.
-- `package_discard_preview`: removes an abandoned preview workspace when the create view is cleared, replaced, or unmounted.
-- `package_create_from_nl`: remains available as a direct-create compatibility path, but the frontend create surface should prefer preview-before-save.
+- `draft_start`: creates `.skill-notebook/drafts/<draft-id>/`, writes `BRIEF.md`, `draft.json`, and a package skeleton, and returns recommended handoff commands.
+- `draft_list`: lists active draft workspaces.
+- `draft_discard`: removes an abandoned draft workspace after confirmation.
+- `draft_import`: imports a completed draft into `.skills/<slug>/`, writes notebook metadata, and returns next eval/version/reference commands.
+- `package_import`: imports an existing local package folder into `.skills/<slug>/`.
+- `package_reference`: returns copyable paths, snippets, link commands, terminal commands, and export handles for a selected package.
 
-Implemented lifecycle behavior:
+Legacy GUI-owned create commands are removed. The UI must route new work through draft start, external-agent handoff, draft import, or direct package import.
 
-- Create preview workspaces older than 24 hours are removed during bootstrap and before generating a new preview.
+Target lifecycle behavior:
 
-## 7. Export And Use Flow
+- Draft workspaces older than a configurable TTL should be flagged or cleaned up.
+- Import should validate package shape before writing into `.skills/`.
+- Import should not automatically save a formal version unless the eval/version policy explicitly allows it.
 
-The design baseline includes an export/use modal. Production V1 should support at least:
+## 7. Quick Reference And Use Flow
+
+The design baseline includes an export/use modal. In the new product model, this becomes a first-class quick reference surface. Production V1 should support at least:
 
 - Copy absolute package path.
 - Copy absolute `SKILL.md` path.
+- Copy Markdown reference snippet.
+- Copy CLI/path reference snippet.
 - Copy command to symlink package into `~/.claude/skills/<slug>`.
 - Copy command to symlink package into `<project>/.claude/skills/<slug>`.
+- Open terminal at the package root.
 - Export a sanitized package zip through the native `package_export_zip` command.
 
 Later:
 
 - Generate reconstruction shell script.
+- Add known local link targets for Codex/OpenClaw when their conventions stabilize.
 
 All commands shown to the user must be derived from real local paths, not mock paths.
 
@@ -315,14 +359,16 @@ Required search targets:
 Required actions:
 
 - Open selected skill.
-- Generate new skill.
+- Open quick reference for selected skill.
+- Start a draft workspace.
+- Import candidate package.
 - Open settings.
 
 Later actions:
 
 - Run eval for selected skill.
 - Save version.
-- Export/use selected skill.
+- Export selected skill.
 
 ## 9. Settings
 
@@ -334,8 +380,10 @@ Required:
 - Open/switch project root.
 - Recent project roots.
 - Skill root name: `.skills`.
-- Agent Runtime configuration: editable runtime mode, provider, base URL, model, write-only API key, Node binary, optional sidecar script, timeout, retry attempts.
-- Creation bridge status: mode, preferred generator, `pi_sidecar` configured/available state, agent provider/model, Node/sidecar paths, `skill-create` availability, Claude CLI availability.
+- Preferred terminal command.
+- Preferred editor command.
+- Preferred external agent command, such as `codex`, `claude`, `opencode`, or a custom shell command.
+- Default local skill link targets where known.
 
 Optional:
 
@@ -375,7 +423,7 @@ Production can use bundled/system fonts if external font loading is undesirable,
 - Cards are used for modals, repeated rows only when needed, and focused information panels.
 - Do not nest cards inside cards.
 - Rows should feel dense and scannable.
-- Buttons should use icons for common actions: search, create, edit, copy, save, settings, export, delete.
+- Buttons should use icons for common actions: search, draft/import, edit, copy, save, settings, export, delete.
 - Use 5-10px radius for compact controls.
 - Avoid large marketing hero sections.
 
@@ -384,7 +432,7 @@ Production can use bundled/system fonts if external font loading is undesirable,
 Use motion sparingly:
 
 - Modal open/close fade.
-- Generation progress pulse.
+- Draft/import status pulse.
 - Hover state transitions under 150ms.
 - Avoid decorative background animation.
 
@@ -401,11 +449,16 @@ src/
   components/
     command/
       CommandPalette.tsx
-    create/
-      CreateSkillModal.tsx
-      CreatePreview.tsx
-    export/
-      ExportUseModal.tsx
+    draft/
+      DraftStartModal.tsx
+      DraftList.tsx
+      DraftImportPanel.tsx
+    import/
+      ImportPackageModal.tsx
+      ImportPreview.tsx
+    reference/
+      QuickReferenceModal.tsx
+      ReferenceCommandList.tsx
     library/
       SkillLibraryColumn.tsx
       SkillRow.tsx
@@ -445,7 +498,7 @@ Interim files may remain, but new implementation work should move toward these o
 
 ## 12. Tauri API Mapping
 
-Existing commands to use:
+Target commands to use:
 
 | Frontend Need | Tauri Command |
 | --- | --- |
@@ -453,12 +506,6 @@ Existing commands to use:
 | Open project root | `project_root_open` |
 | Create project root | `project_root_create` |
 | List recent project roots | `project_root_list_recent` |
-| Create package from text | `package_create_from_nl` |
-| Generate package preview | `package_generate_preview_from_nl` |
-| Generate package preview from local paths | `package_generate_preview_from_sources` |
-| Generate package preview from URL | `package_generate_preview_from_url` |
-| Commit package preview | `package_commit_preview` |
-| Discard package preview | `package_discard_preview` |
 | Package file tree | `package_file_tree` |
 | Read package file | `package_file_read` |
 | Write package file | `package_file_write` |
@@ -469,13 +516,20 @@ Existing commands to use:
 | Save version | `package_save_version` |
 | Diff version | `package_diff_version` |
 | Restore version | `package_restore_version` |
+| Quick reference data | `package_reference` |
+| Import package folder | `package_import` |
 | Export sanitized zip | `package_export_zip` |
+| Start draft workspace | `draft_start` |
+| List draft workspaces | `draft_list` |
+| Import draft workspace | `draft_import` |
+| Discard draft workspace | `draft_discard` |
 | Settings | `settings_get` |
 
 Current implementation state:
 
-- No known V1 implementation gaps remain against this frontend contract.
-- URL-based package generation, native sanitized zip export, shell/script-backed package test execution, and clean-editor filesystem refresh are implemented.
+- Existing generation-preview surfaces and backend commands have been removed from the target contract.
+- Draft/import/reference commands are the supported path and replace GUI-owned generation.
+- Native sanitized zip export, shell/script-backed package test execution, and clean-editor filesystem refresh remain useful.
 
 ## 13. Migration Plan
 
@@ -499,18 +553,23 @@ Current implementation state:
 - Add file dirty-state guards.
 - Improve preview/edit title bar and copy action.
 
-### Phase 4: Create Flow
+### Phase 4: Reference And Use
 
-- Replace simple create page with preview-before-save flow.
-- Support text, local file/directory, and URL modes against backend preview commands.
-- Add generation progress and post-create summary.
+- Promote quick reference/use to a primary selected-skill action.
+- Add copyable path, Markdown reference, CLI reference, symlink, terminal, and export actions.
+- Keep commands visible and derived from real local paths.
 
-### Phase 5: Eval, Version, Export
+### Phase 5: Draft And Import
+
+- Replace GUI-owned generation with draft workspace bootstrap.
+- Add import package and import draft flows.
+- Add external-agent handoff commands and terminal open actions.
+
+### Phase 6: Eval And Version
 
 - Move eval/version actions into a deliberate quality gate panel.
 - Add version save modal with eval snapshot and required version note.
 - Improve diff and restore UI with dedicated modal flows.
-- Add export/use modal with real local path commands.
 
 ## 14. Acceptance Checklist
 
@@ -522,14 +581,17 @@ Before considering frontend alignment complete:
 - User can run eval and understand scores/suggestions.
 - User can save a formal version only after eval.
 - User can view diff and restore a version with confirmation.
-- User can generate a skill from text, local sources, or URL and land in the created package.
-- User can copy local usage paths, symlink commands, or export a sanitized zip.
+- User can copy local usage paths, reference snippets, symlink commands, terminal commands, or export a sanitized zip.
+- User can start a draft workspace and see the recommended external-agent command.
+- User can import an existing candidate package or completed draft into `.skills/`.
 - No UI exposes mock-only capabilities as real.
 - `npm run build` passes.
 
 ## 15. Explicit Non-Goals For V1
 
 - Public marketplace.
+- GUI-owned AI skill generation.
+- Model provider/runtime configuration as a core product requirement.
 - Cloud sync.
 - Team collaboration.
 - Account system.

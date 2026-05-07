@@ -3,18 +3,18 @@ import type {
   AppBootstrap,
   AppEnvelope,
   AppSettings,
-  CommitPackagePreviewRequest,
-  CreatePackageFromNlRequest,
-  CreatePackageFromNlResponse,
-  CreatePackageFromSourcesRequest,
-  CreatePackageFromUrlRequest,
-  CreatePackagePreviewResponse,
-  DiscardPackagePreviewRequest,
   EvalReport,
   FileContent,
   FileEntry,
+  DraftDiscardRequest,
+  DraftImportRequest,
+  DraftImportResponse,
+  DraftStartRequest,
+  DraftWorkspace,
   PackageExportArtifact,
-  PackagePreviewFile,
+  PackageImportRequest,
+  PackageImportResponse,
+  PackageReferenceResponse,
   PackageTestReport,
   PackageUpdateRequest,
   PackageVersionDiff,
@@ -240,30 +240,12 @@ function cloneSettings(): AppSettings {
     currentProjectRoot: demoBootstrap.projectRoot.rootPath,
     settingsPath: null,
     recentProjectRoots: [demoBootstrap.projectRoot],
-    creationBridge: {
-      mode: "auto",
-      preferredGenerator: "template_fallback",
-      piSidecarAvailable: false,
-      piSidecarConfigured: false,
-      piNodeBinary: "node",
-      piNodeResolvedPath: null,
-      piSidecarScript: null,
-      piSidecarScriptPath: null,
-      agentProvider: "openai-compatible",
-      agentBaseUrl: null,
-      agentBaseUrlConfigured: false,
-      agentApiKeyConfigured: false,
-      agentModel: null,
-      agentTimeoutSecs: 300,
-      agentRetryAttempts: 3,
-      claudeCliAvailable: false,
-      skillCreateCommandAvailable: false,
-      claudeBinary: "claude",
-      claudeModel: null,
-      claudeTimeoutSecs: 300,
-      claudeRetryAttempts: 3,
-      claudeRetryBackoffSecs: 8,
-      fallbackGenerator: "template_fallback",
+    handoff: {
+      terminalCommand: "open -a Terminal",
+      editorCommand: null,
+      agentCommand: "codex",
+      globalClaudeSkillsDir: "~/.claude/skills",
+      projectClaudeSkillsDirName: ".claude/skills",
     },
   };
 }
@@ -302,6 +284,10 @@ function wrapRuntimeError(action: string, error: unknown): Error {
   return error instanceof Error ? error : new Error(`${action} failed.`);
 }
 
+function shellQuote(value: string) {
+  return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
+}
+
 function demoSlugify(value: string): string {
   return value
     .trim()
@@ -310,411 +296,73 @@ function demoSlugify(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-function uniqueDemoSlug(baseSlug: string): string {
-  const rootSlug = baseSlug || "new-skill";
-  const existing = new Set(demoBootstrap.packages.map((item) => item.slug));
-  if (!existing.has(rootSlug)) return rootSlug;
-
-  for (let suffix = 2; suffix < 1000; suffix += 1) {
-    const candidate = `${rootSlug}-${suffix}`;
-    if (!existing.has(candidate)) return candidate;
-  }
-
-  return `${rootSlug}-${Date.now()}`;
-}
-
-function titleCaseSlug(slug: string): string {
-  return slug
-    .split("-")
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
-
 function summarizeDemoGoal(prompt: string) {
   const normalized = prompt.trim().replace(/\s+/g, " ").replace(/[.!?。！？]+$/g, "");
   return normalized.length > 96 ? `${normalized.slice(0, 96)}...` : normalized;
 }
 
-function sortFileTree(entries: FileEntry[]): FileEntry[] {
-  return entries
-    .map((entry) => ({
-      ...entry,
-      children: entry.children ? sortFileTree(entry.children) : entry.children,
-    }))
-    .sort((left, right) => {
-      if (left.isDirectory !== right.isDirectory) return left.isDirectory ? -1 : 1;
-      if (left.name.toLowerCase() === "skill.md") return -1;
-      if (right.name.toLowerCase() === "skill.md") return 1;
-      return left.name.localeCompare(right.name, "zh-CN", { sensitivity: "base" });
-    });
-}
-
-function filesToTree(files: PackagePreviewFile[]): FileEntry[] {
-  const root: FileEntry[] = [];
-
-  files.forEach((file) => {
-    const parts = file.path.split("/").filter(Boolean);
-    let cursor = root;
-    let currentPath = "";
-
-    parts.forEach((part, index) => {
-      currentPath = currentPath ? `${currentPath}/${part}` : part;
-      const isDirectory = index < parts.length - 1;
-      let entry = cursor.find((item) => item.path === currentPath);
-
-      if (!entry) {
-        entry = {
-          path: currentPath,
-          name: part,
-          isDirectory,
-          children: isDirectory ? [] : undefined,
-        };
-        cursor.push(entry);
-      }
-
-      if (isDirectory) {
-        entry.children ??= [];
-        cursor = entry.children;
-      }
-    });
-  });
-
-  return sortFileTree(root);
-}
-
-const demoCreatePreviews: Record<string, CreatePackagePreviewResponse> = {};
-
-function makeDemoCreatePreview(
-  payload: CreatePackageFromNlRequest,
-): CreatePackagePreviewResponse {
-  const goal = summarizeDemoGoal(payload.prompt);
-  const stopWords = new Set([
-    "a",
-    "an",
-    "and",
-    "create",
-    "for",
-    "from",
-    "into",
-    "reusable",
-    "skill",
-    "the",
-    "to",
-    "turn",
-    "turning",
-    "with",
-  ]);
-  const keywords = payload.prompt
-    .split(/[^A-Za-z0-9\u4e00-\u9fa5]+/)
-    .map((item) => item.trim())
-    .filter((item) => item.length >= 2 && !stopWords.has(item.toLowerCase()))
-    .slice(0, 4);
-  const englishSeed = keywords.filter((item) => /^[A-Za-z0-9]+$/.test(item)).join(" ") || "new skill";
-  const slug = uniqueDemoSlug(demoSlugify(englishSeed).split("-").slice(0, 4).join("-"));
-  const name = titleCaseSlug(slug);
-  const description = `Structures a reusable workflow for ${goal}. Use when this task should become a repeatable skill package.`;
-  const tags = keywords.length > 0 ? keywords : ["workflow", "draft"];
-  const createdAt = new Date().toISOString();
-  const previewId = `preview-${slug}-${Date.now()}`;
-  const smokeTest = {
-    name: "smoke-test",
-    package: slug,
-    prompt: `Use this skill for: ${goal}`,
-    expectedOutput: "A structured deliverable with clear steps, output sections, and follow-up notes.",
-    checks: [
-      "SKILL.md frontmatter validates successfully.",
-      "Prompt, example, and eval files are present.",
-      "The package describes when to use the skill and what it outputs.",
-    ],
-  };
-  const evals = {
-    skill_name: slug,
-    evals: [
+function demoPackageReference(packageId: string): PackageReferenceResponse {
+  const pkg = findDemoPackage(packageId);
+  const packagePath = pkg.rootPath;
+  const skillMdPath = `${packagePath}/SKILL.md`;
+  return {
+    packageId,
+    slug: pkg.slug,
+    packagePath,
+    skillMdPath,
+    items: [
+      { id: "package-path", label: "Package path", value: packagePath, kind: "path" },
+      { id: "skill-md-path", label: "SKILL.md path", value: skillMdPath, kind: "path" },
       {
-        id: 1,
-        prompt: smokeTest.prompt,
-        expected_output: smokeTest.expectedOutput,
-        files: [],
-        expectations: smokeTest.checks,
+        id: "markdown-reference",
+        label: "Markdown reference",
+        value: `Use the \`${pkg.slug}\` skill package at \`${skillMdPath}\`.`,
+        kind: "snippet",
+      },
+      {
+        id: "cli-reference",
+        label: "CLI reference",
+        value: `skill reference ${pkg.id}`,
+        kind: "snippet",
+      },
+      {
+        id: "terminal-command",
+        label: "Open package in terminal",
+        value: `cd ${shellQuote(packagePath)}`,
+        kind: "command",
+      },
+      {
+        id: "global-claude-link",
+        label: "Link to global Claude skills",
+        value: `mkdir -p ~/.claude/skills && ln -sfn ${shellQuote(packagePath)} ~/.claude/skills/${pkg.slug}`,
+        kind: "command",
       },
     ],
   };
-  const files: PackagePreviewFile[] = [
-    {
-      path: "SKILL.md",
-      encoding: "utf-8",
-      content: `---
-name: ${slug}
-description: "${description.replaceAll('"', '\\"')}"
-metadata:
-  author: skill-notebook
-  version: 0.1.0
----
+}
 
-# ${name}
+const demoDrafts: Record<string, DraftWorkspace> = {};
 
-## Overview
-
-This skill helps with ${goal} while keeping the output consistent and reusable.
-
-## When to Use
-
-- Use when the user asks for ${goal}.
-- Use when this workflow should become a repeatable skill package.
-
-## When Not to Use
-
-- Do not use for unrelated requests.
-- Ask for missing source material instead of guessing.
-
-## Inputs
-
-- primary task request
-- optional supporting context or source files
-- constraints that affect the final deliverable
-
-## Outputs
-
-- a structured deliverable for ${goal}
-- concise notes about gaps, risks, or follow-up actions
-
-## Workflow
-
-1. Restate the goal.
-2. Inspect the provided material.
-3. Apply the workflow.
-4. Return a structured result.
-
-## Quick Reference
-
-| Operation | How |
-|-----------|-----|
-| Draft the result | Follow \`prompts/task.md\` |
-| Stay on-brief | Use \`prompts/system.md\` |
-
-## Resources
-
-- \`prompts/\` - Task framing.
-- \`examples/\` - Sample output.
-- \`evals/\` - Re-runnable expectations.
-`,
-    },
-    {
-      path: "prompts/system.md",
-      encoding: "utf-8",
-      content: `You are the ${name} skill. Stay within the package instructions, clarify missing inputs, and return a structured result.\n\nFocus: ${goal}.\n`,
-    },
-    {
-      path: "prompts/task.md",
-      encoding: "utf-8",
-      content: `1. Confirm the goal in one sentence.\n2. Inspect the provided inputs before deciding on output shape.\n3. Produce the final deliverable for ${goal}.\n4. Call out uncertainty, missing data, and follow-up recommendations.\n`,
-    },
-    {
-      path: "examples/example-01.md",
-      encoding: "utf-8",
-      content: `## Example\n\nInput: ${goal}\n\nOutput:\n- Goal: ${goal}\n- Key steps: review inputs, apply the workflow, present a structured result\n- Risks: missing context or incomplete source material\n`,
-    },
-    {
-      path: "tests/smoke-test.json",
-      encoding: "utf-8",
-      content: `${JSON.stringify(smokeTest, null, 2)}\n`,
-    },
-    {
-      path: "evals/evals.json",
-      encoding: "utf-8",
-      content: `${JSON.stringify(evals, null, 2)}\n`,
-    },
-  ];
-
-  const preview: CreatePackagePreviewResponse = {
-    previewId,
+function makeDemoDraft(payload: DraftStartRequest): DraftWorkspace {
+  const goal = summarizeDemoGoal(payload.prompt || payload.sourceUrl || payload.sourcePaths?.[0] || "new skill");
+  const slug = demoSlugify(goal).split("-").slice(0, 5).join("-") || "new-skill";
+  const draftId = `draft-${slug}-${Date.now()}`;
+  const draftPath = `${demoBootstrap.projectRoot.rootPath}/.skill-notebook/drafts/${draftId}`;
+  const agent = payload.preferredAgentCommand?.trim() || "codex";
+  const draft: DraftWorkspace = {
+    draftId,
     projectRootId: payload.projectRootId,
-    name,
-    slug,
-    description,
-    tags,
-    files,
-    fileTree: filesToTree(files),
-    generatorUsed: "template_fallback",
-    generationSummary: "Browser preview used the local template generator.",
-    createdAt,
+    draftPath,
+    briefPath: `${draftPath}/BRIEF.md`,
+    intendedSlug: slug,
+    sourceKind: payload.sourcePaths?.length ? "files" : payload.sourceUrl ? "url" : payload.prompt ? "text" : "empty",
+    sourceSummary: goal,
+    suggestedCommand: `cd ${shellQuote(draftPath)} && ${agent}`,
+    importCommand: `skill draft import ${draftId}`,
+    createdAt: new Date().toISOString(),
   };
-  demoCreatePreviews[previewId] = preview;
-  return JSON.parse(JSON.stringify(preview)) as CreatePackagePreviewResponse;
-}
-
-function makeDemoCreatePreviewFromSources(
-  payload: CreatePackageFromSourcesRequest,
-): CreatePackagePreviewResponse {
-  const sourcePaths = payload.sourcePaths.map((path) => path.trim()).filter(Boolean);
-  if (sourcePaths.length === 0) {
-    throw new Error("Add at least one local file or directory path.");
-  }
-
-  const inventory = [
-    "# Source Inventory",
-    "",
-    "This browser preview cannot read local files directly. Native Tauri mode will inspect these paths and attach text excerpts when possible.",
-    "",
-    "## Requested Paths",
-    "",
-    ...sourcePaths.map((path) => `- \`${path}\``),
-    "",
-  ].join("\n");
-  const preview = makeDemoCreatePreview({
-    projectRootId: payload.projectRootId,
-    prompt: payload.prompt?.trim() || `Create a reusable skill from ${sourcePaths.length} local source path(s).`,
-    context: [
-      payload.context?.trim(),
-      "Local source paths:",
-      ...sourcePaths.map((path) => `- ${path}`),
-    ].filter(Boolean).join("\n"),
-  });
-  preview.files.push({
-    path: "references/source-inventory.md",
-    content: inventory,
-    encoding: "utf-8",
-  });
-  preview.fileTree = filesToTree(preview.files);
-  preview.generationSummary = `${preview.generationSummary} Source inventory attached from ${sourcePaths.length} local path(s).`;
-  demoCreatePreviews[preview.previewId] = preview;
-
-  return JSON.parse(JSON.stringify(preview)) as CreatePackagePreviewResponse;
-}
-
-function makeDemoCreatePreviewFromUrl(
-  payload: CreatePackageFromUrlRequest,
-): CreatePackagePreviewResponse {
-  const url = payload.url.trim();
-  if (!/^https?:\/\//i.test(url)) {
-    throw new Error("URL must start with http:// or https://.");
-  }
-
-  const inventory = [
-    "# URL Source",
-    "",
-    "Browser preview records the URL as source material. Native Tauri mode fetches the page and adds an excerpt when possible.",
-    "",
-    `- URL: ${url}`,
-    "",
-  ].join("\n");
-  const preview = makeDemoCreatePreview({
-    projectRootId: payload.projectRootId,
-    prompt: payload.prompt?.trim() || `Create a reusable skill from ${url}.`,
-    context: [
-      payload.context?.trim(),
-      `Source URL: ${url}`,
-    ].filter(Boolean).join("\n"),
-  });
-  preview.files.push({
-    path: "references/url-source.md",
-    content: inventory,
-    encoding: "utf-8",
-  });
-  preview.fileTree = filesToTree(preview.files);
-  preview.generationSummary = `${preview.generationSummary} URL source attached.`;
-  demoCreatePreviews[preview.previewId] = preview;
-
-  return JSON.parse(JSON.stringify(preview)) as CreatePackagePreviewResponse;
-}
-
-function commitDemoCreatePreview(
-  payload: CommitPackagePreviewRequest,
-): CreatePackageFromNlResponse {
-  const preview = demoCreatePreviews[payload.previewId];
-  if (!preview) {
-    throw new Error("Preview no longer exists. Generate it again before saving.");
-  }
-  if (preview.projectRootId !== payload.projectRootId) {
-    throw new Error("Preview belongs to a different project root.");
-  }
-
-  const packageId = `pkg-${preview.slug}`;
-  const rootPath = `${demoBootstrap.projectRoot.rootPath}/.skills/${preview.slug}`;
-  const createdAt = new Date().toISOString();
-  demoBootstrap.packages.unshift({
-    id: packageId,
-    projectRootId: preview.projectRootId,
-    slug: preview.slug,
-    name: preview.name,
-    description: preview.description,
-    tags: preview.tags,
-    status: "needs_eval",
-    rootPath,
-    currentVersion: 0,
-    lastEvalStatus: "needs_improvement",
-    relatedSkills: [],
-    bundleCandidates: [],
-    createdAt,
-    updatedAt: createdAt,
-  });
-  demoBootstrap.evalReports.unshift({
-    id: `eval-${preview.slug}-draft`,
-    packageId,
-    completenessScore: 0.78,
-    clarityScore: 0.74,
-    executabilityScore: 0.7,
-    overallStatus: "needs_improvement",
-    suggestions: ["补充一个贴近真实输入的示例。", "保存正式版本前再跑一次评估。"],
-    details: {
-      hasSkillMd: true,
-      hasExamples: true,
-      hasPrompts: true,
-      hasScripts: false,
-      inputDefined: true,
-      outputDefined: true,
-      boundariesClear: false,
-      notes: ["浏览器演示模式生成了完整预览文件。"],
-    },
-    createdAt,
-  });
-  demoBootstrap.previews.unshift({
-    packageId,
-    name: preview.name,
-    hasSkillMd: true,
-    promptFiles: preview.files.filter((file) => file.path.startsWith("prompts/")).map((file) => file.path),
-    exampleFiles: preview.files.filter((file) => file.path.startsWith("examples/")).map((file) => file.path),
-    referenceFiles: [],
-    scriptFiles: [],
-    testFiles: preview.files.filter((file) => file.path.startsWith("tests/")).map((file) => file.path),
-    skillMdPreview: preview.files.find((file) => file.path === "SKILL.md")?.content.slice(0, 120) ?? "",
-    examplePreview: preview.files.find((file) => file.path.startsWith("examples/"))?.content.slice(0, 120) ?? "",
-    finalPreview: "草稿已从预览保存，等待评估与正式版本化。",
-  });
-  demoBootstrap.selectedPackageId = packageId;
-  demoBootstrap.activityLog.unshift(`${preview.name} 已从创建预览保存为草稿。`);
-  demoFileTrees[packageId] = preview.fileTree;
-  preview.files.forEach((file) => {
-    demoFileContents[`${packageId}/${file.path}`] = file.content;
-  });
-  delete demoCreatePreviews[payload.previewId];
-
-  return {
-    packageId,
-    name: preview.name,
-    slug: preview.slug,
-    rootPath,
-    evalWorkspacePath: `${demoBootstrap.projectRoot.rootPath}/.42eval/${preview.slug}`,
-    draftCreated: true,
-    autoEvalStarted: true,
-    validationSummary: "Demo preview saved and marked for follow-up evaluation.",
-    generatorUsed: preview.generatorUsed,
-    generationSummary: preview.generationSummary,
-  };
-}
-
-function discardDemoCreatePreview(payload: DiscardPackagePreviewRequest): boolean {
-  const preview = demoCreatePreviews[payload.previewId];
-  if (!preview) {
-    return false;
-  }
-  if (preview.projectRootId !== payload.projectRootId) {
-    throw new Error("Preview belongs to a different project root.");
-  }
-
-  delete demoCreatePreviews[payload.previewId];
-  return true;
+  demoDrafts[draftId] = draft;
+  return JSON.parse(JSON.stringify(draft)) as DraftWorkspace;
 }
 
 function findDemoPackage(packageId: string): SkillPackage {
@@ -1090,17 +738,8 @@ export async function getSettings(): Promise<AppSettings> {
 export async function updateSettings(payload: SettingsUpdatePayload): Promise<AppSettings> {
   if (!hasTauriRuntime()) {
     const next = cloneSettings();
-    if (payload.agentRuntime) {
-      next.creationBridge.mode = payload.agentRuntime.mode ?? next.creationBridge.mode;
-      next.creationBridge.agentProvider = payload.agentRuntime.provider ?? next.creationBridge.agentProvider;
-      next.creationBridge.agentBaseUrl = payload.agentRuntime.baseUrl ?? null;
-      next.creationBridge.agentBaseUrlConfigured = Boolean(payload.agentRuntime.baseUrl);
-      next.creationBridge.agentApiKeyConfigured = Boolean(payload.agentRuntime.apiKey) && !payload.agentRuntime.clearApiKey;
-      next.creationBridge.agentModel = payload.agentRuntime.model ?? null;
-      next.creationBridge.piNodeBinary = payload.agentRuntime.nodeBinary ?? next.creationBridge.piNodeBinary;
-      next.creationBridge.piSidecarScript = payload.agentRuntime.sidecarScript ?? null;
-      next.creationBridge.agentTimeoutSecs = payload.agentRuntime.timeoutSecs ?? next.creationBridge.agentTimeoutSecs;
-      next.creationBridge.agentRetryAttempts = payload.agentRuntime.retryAttempts ?? next.creationBridge.agentRetryAttempts;
+    if (payload.handoff) {
+      next.handoff = { ...next.handoff, ...payload.handoff };
     }
     return next;
   }
@@ -1139,114 +778,6 @@ export async function createProjectRoot(name: string): Promise<ProjectRoot> {
   }
 }
 
-export async function createPackageFromNl(
-  payload: CreatePackageFromNlRequest,
-): Promise<CreatePackageFromNlResponse> {
-  if (!hasTauriRuntime()) {
-    throw runtimeRequiredError("Package creation");
-  }
-
-  try {
-    const response = await invoke<AppEnvelope<CreatePackageFromNlResponse>>(
-      "package_create_from_nl",
-      { req: payload },
-    );
-    return unwrapResponse(response);
-  } catch (error) {
-    throw wrapRuntimeError("Package creation", error);
-  }
-}
-
-export async function generatePackagePreviewFromNl(
-  payload: CreatePackageFromNlRequest,
-): Promise<CreatePackagePreviewResponse> {
-  if (!hasTauriRuntime()) {
-    return makeDemoCreatePreview(payload);
-  }
-
-  try {
-    const response = await invoke<AppEnvelope<CreatePackagePreviewResponse>>(
-      "package_generate_preview_from_nl",
-      { req: payload },
-    );
-    return unwrapResponse(response);
-  } catch (error) {
-    throw wrapRuntimeError("Package preview generation", error);
-  }
-}
-
-export async function generatePackagePreviewFromSources(
-  payload: CreatePackageFromSourcesRequest,
-): Promise<CreatePackagePreviewResponse> {
-  if (!hasTauriRuntime()) {
-    return makeDemoCreatePreviewFromSources(payload);
-  }
-
-  try {
-    const response = await invoke<AppEnvelope<CreatePackagePreviewResponse>>(
-      "package_generate_preview_from_sources",
-      { req: payload },
-    );
-    return unwrapResponse(response);
-  } catch (error) {
-    throw wrapRuntimeError("Package source preview generation", error);
-  }
-}
-
-export async function generatePackagePreviewFromUrl(
-  payload: CreatePackageFromUrlRequest,
-): Promise<CreatePackagePreviewResponse> {
-  if (!hasTauriRuntime()) {
-    return makeDemoCreatePreviewFromUrl(payload);
-  }
-
-  try {
-    const response = await invoke<AppEnvelope<CreatePackagePreviewResponse>>(
-      "package_generate_preview_from_url",
-      { req: payload },
-    );
-    return unwrapResponse(response);
-  } catch (error) {
-    throw wrapRuntimeError("Package URL preview generation", error);
-  }
-}
-
-export async function commitPackagePreview(
-  payload: CommitPackagePreviewRequest,
-): Promise<CreatePackageFromNlResponse> {
-  if (!hasTauriRuntime()) {
-    return commitDemoCreatePreview(payload);
-  }
-
-  try {
-    const response = await invoke<AppEnvelope<CreatePackageFromNlResponse>>(
-      "package_commit_preview",
-      { req: payload },
-    );
-    return unwrapResponse(response);
-  } catch (error) {
-    throw wrapRuntimeError("Package preview saving", error);
-  }
-}
-
-export async function discardPackagePreview(
-  payload: DiscardPackagePreviewRequest,
-): Promise<boolean> {
-  if (!hasTauriRuntime()) {
-    return discardDemoCreatePreview(payload);
-  }
-
-  try {
-    const response = await invoke<AppEnvelope<boolean>>(
-      "package_discard_preview",
-      { req: payload },
-    );
-    return unwrapResponse(response);
-  } catch (error) {
-    throw wrapRuntimeError("Package preview discard", error);
-  }
-}
-
 export async function updatePackage(
   packageId: string,
   payload: PackageUpdateRequest,
@@ -1278,6 +809,96 @@ export async function exportPackageZip(packageId: string): Promise<PackageExport
     return unwrapResponse(response);
   } catch (error) {
     throw wrapRuntimeError("Native package export", error);
+  }
+}
+
+export async function getPackageReference(packageId: string): Promise<PackageReferenceResponse> {
+  if (!hasTauriRuntime()) {
+    return demoPackageReference(packageId);
+  }
+
+  try {
+    const response = await invoke<AppEnvelope<PackageReferenceResponse>>("package_reference", {
+      packageId,
+    });
+    return unwrapResponse(response);
+  } catch (error) {
+    throw wrapRuntimeError("Package reference", error);
+  }
+}
+
+export async function importPackage(payload: PackageImportRequest): Promise<PackageImportResponse> {
+  if (!hasTauriRuntime()) {
+    throw runtimeRequiredError("Package import");
+  }
+
+  try {
+    const response = await invoke<AppEnvelope<PackageImportResponse>>("package_import", {
+      req: payload,
+    });
+    return unwrapResponse(response);
+  } catch (error) {
+    throw wrapRuntimeError("Package import", error);
+  }
+}
+
+export async function startDraft(payload: DraftStartRequest): Promise<DraftWorkspace> {
+  if (!hasTauriRuntime()) {
+    return makeDemoDraft(payload);
+  }
+
+  try {
+    const response = await invoke<AppEnvelope<DraftWorkspace>>("draft_start", {
+      req: payload,
+    });
+    return unwrapResponse(response);
+  } catch (error) {
+    throw wrapRuntimeError("Draft start", error);
+  }
+}
+
+export async function listDrafts(): Promise<DraftWorkspace[]> {
+  if (!hasTauriRuntime()) {
+    return Object.values(demoDrafts);
+  }
+
+  try {
+    const response = await invoke<AppEnvelope<DraftWorkspace[]>>("draft_list");
+    return unwrapResponse(response);
+  } catch (error) {
+    throw wrapRuntimeError("Draft list", error);
+  }
+}
+
+export async function discardDraft(payload: DraftDiscardRequest): Promise<boolean> {
+  if (!hasTauriRuntime()) {
+    const existed = Boolean(demoDrafts[payload.draftId]);
+    delete demoDrafts[payload.draftId];
+    return existed;
+  }
+
+  try {
+    const response = await invoke<AppEnvelope<boolean>>("draft_discard", {
+      req: payload,
+    });
+    return unwrapResponse(response);
+  } catch (error) {
+    throw wrapRuntimeError("Draft discard", error);
+  }
+}
+
+export async function importDraft(payload: DraftImportRequest): Promise<DraftImportResponse> {
+  if (!hasTauriRuntime()) {
+    throw runtimeRequiredError("Draft import");
+  }
+
+  try {
+    const response = await invoke<AppEnvelope<DraftImportResponse>>("draft_import", {
+      req: payload,
+    });
+    return unwrapResponse(response);
+  } catch (error) {
+    throw wrapRuntimeError("Draft import", error);
   }
 }
 

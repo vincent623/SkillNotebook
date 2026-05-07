@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CommandPalette } from "../components/command/CommandPalette";
-import { ExportUseModal } from "../components/export/ExportUseModal";
+import { QuickReferenceModal } from "../components/reference/QuickReferenceModal";
 import { VersionPanel } from "../components/notebook/VersionPanel";
 import { WorkbenchView } from "./views/WorkbenchView";
-import { CreateView } from "./views/CreateView";
+import { DraftImportView } from "./views/DraftImportView";
 import { SettingsPage } from "./routes/SettingsPage";
 import { useUiStore } from "../stores/ui-store";
 import { useEditorStore } from "../stores/editor-store";
@@ -168,6 +168,12 @@ export default function App() {
   }, [loadBootstrap]);
 
   useEffect(() => {
+    const handleOpenReference = () => setExportOpen(true);
+    window.addEventListener("skillnotebook:open-reference", handleOpenReference);
+    return () => window.removeEventListener("skillnotebook:open-reference", handleOpenReference);
+  }, []);
+
+  useEffect(() => {
     if (currentScreen !== "explorer" && currentScreen !== "notebook") return undefined;
 
     const intervalId = window.setInterval(() => {
@@ -217,9 +223,9 @@ export default function App() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         if (isDirty && selectedPackageId && (currentScreen === "explorer" || currentScreen === "notebook")) {
-          setPendingScreen("create");
+          setPendingScreen("draft");
         } else {
-          setCurrentScreen("create");
+          setCurrentScreen("draft");
         }
       }
       if (event.key === "Escape") {
@@ -298,12 +304,12 @@ export default function App() {
             <kbd>⌘K</kbd>
           </button>
           <button
-            className="topbar-create"
-            onClick={() => requestScreen("create")}
+            className="topbar-draft"
+            onClick={() => requestScreen("draft")}
             type="button"
           >
             <WandIcon />
-            生成 Skill
+            导入 / 草稿
           </button>
           <button
             className="topbar-icon-button"
@@ -321,7 +327,7 @@ export default function App() {
             type="button"
           >
             <DownloadIcon />
-            导出
+            快速引用
           </button>
           <button
             className={`topbar-icon-button ${currentScreen === "settings" ? "is-active" : ""}`}
@@ -339,12 +345,12 @@ export default function App() {
 
       <div className="window-stage">
         {(currentScreen === "explorer" || currentScreen === "notebook") && <WorkbenchView />}
-        {currentScreen === "create" && <CreateView />}
+        {currentScreen === "draft" && <DraftImportView />}
         {currentScreen === "settings" && <SettingsPage />}
       </div>
       <CommandPalette />
       {exportOpen && bootstrap && selectedPackage ? (
-        <ExportUseModal
+        <QuickReferenceModal
           onClose={() => setExportOpen(false)}
           pkg={selectedPackage}
           projectRoot={bootstrap.projectRoot}

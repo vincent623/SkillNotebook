@@ -213,7 +213,7 @@ export function WorkbenchView() {
     <section className="workbench-view">
       <SkillLibraryColumn
         bootstrap={bootstrap}
-        onCreate={() => setCurrentScreen("create")}
+        onCreate={() => setCurrentScreen("draft")}
         onSelectPackage={requestPackageSelect}
         selectedPackageId={selectedPackageId}
       />

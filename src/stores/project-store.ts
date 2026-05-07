@@ -1,16 +1,14 @@
 import { create } from "zustand";
 import {
-  createPackageFromNl,
   getAppBootstrap,
   restorePackageVersion,
   runPackageEval,
   runPackageTest,
   savePackageVersion,
 } from "../services/tauri-api";
-import type { AppBootstrap, CreatePackageFromNlResponse, PackageTestReport } from "../types/models";
+import type { AppBootstrap, PackageTestReport } from "../types/models";
 
 type ProjectStatus = "idle" | "loading" | "ready" | "error";
-type CreatePackageStatus = "idle" | "submitting" | "success" | "error";
 type EvalRunStatus = "idle" | "submitting" | "success" | "error";
 type TestRunStatus = "idle" | "submitting" | "success" | "error";
 type VersionSaveStatus = "idle" | "submitting" | "success" | "error";
@@ -21,12 +19,6 @@ interface ProjectStore {
   bootstrap: AppBootstrap | null;
   selectedPackageId: string | null;
   errorMessage: string | null;
-  createComposerOpen: boolean;
-  createPrompt: string;
-  createContext: string;
-  createStatus: CreatePackageStatus;
-  createError: string | null;
-  lastCreateResult: CreatePackageFromNlResponse | null;
   evalStatus: EvalRunStatus;
   evalError: string | null;
   lastEvalPackageId: string | null;
@@ -48,10 +40,6 @@ interface ProjectStore {
   loadBootstrap: () => Promise<void>;
   refreshBootstrap: (preferredPackageId?: string | null) => Promise<void>;
   selectPackage: (packageId: string) => void;
-  toggleCreateComposer: (nextOpen?: boolean) => void;
-  setCreatePrompt: (value: string) => void;
-  setCreateContext: (value: string) => void;
-  createPackage: () => Promise<CreatePackageFromNlResponse | null>;
   runEval: (packageId: string) => Promise<boolean>;
   runTest: (packageId: string) => Promise<boolean>;
   saveVersion: (packageId: string, note?: string | null) => Promise<boolean>;
@@ -83,12 +71,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   bootstrap: null,
   selectedPackageId: null,
   errorMessage: null,
-  createComposerOpen: false,
-  createPrompt: "",
-  createContext: "",
-  createStatus: "idle",
-  createError: null,
-  lastCreateResult: null,
   evalStatus: "idle",
   evalError: null,
   lastEvalPackageId: null,
@@ -136,74 +118,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       testError: null,
       versionRestoreError: null,
     });
-  },
-  toggleCreateComposer: (nextOpen) => {
-    set((state) => {
-      const open = nextOpen ?? !state.createComposerOpen;
-      return {
-        createComposerOpen: open,
-        createError: null,
-        createStatus: open ? state.createStatus : "idle",
-      };
-    });
-  },
-  setCreatePrompt: (value) => {
-    set({ createPrompt: value });
-  },
-  setCreateContext: (value) => {
-    set({ createContext: value });
-  },
-  createPackage: async () => {
-    const bootstrap = get().bootstrap;
-    const prompt = get().createPrompt.trim();
-    const context = get().createContext.trim();
-
-    if (!bootstrap) {
-      set({
-        createStatus: "error",
-        createError: "project root is still loading. Try again in a moment.",
-      });
-      return null;
-    }
-
-    if (!prompt) {
-      set({
-        createStatus: "error",
-        createError: "Describe the skill you want to create before generating a draft.",
-      });
-      return null;
-    }
-
-    set({
-      createStatus: "submitting",
-      createError: null,
-      lastCreateResult: null,
-    });
-
-    try {
-      const result = await createPackageFromNl({
-        projectRootId: bootstrap.projectRoot.id,
-        prompt,
-        context: context || null,
-      });
-      const refreshedState = await refreshBootstrap(result.packageId);
-      set({
-        ...refreshedState,
-        createComposerOpen: false,
-        createPrompt: "",
-        createContext: "",
-        createStatus: "success",
-        createError: null,
-        lastCreateResult: result,
-      });
-      return result;
-    } catch (error) {
-      set({
-        createStatus: "error",
-        createError: error instanceof Error ? error.message : "Package creation failed.",
-      });
-      return null;
-    }
   },
   runEval: async (packageId) => {
     set({

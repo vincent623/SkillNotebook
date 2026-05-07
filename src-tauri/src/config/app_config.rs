@@ -11,21 +11,29 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
     pub target_platform: String,
-    pub agent_runtime: AgentRuntimeConfig,
+    pub handoff: HandoffConfig,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct AgentRuntimeConfig {
-    pub mode: Option<String>,
-    pub provider: Option<String>,
-    pub base_url: Option<String>,
-    pub api_key: Option<String>,
-    pub model: Option<String>,
-    pub node_binary: Option<String>,
-    pub sidecar_script: Option<String>,
-    pub timeout_secs: Option<u64>,
-    pub retry_attempts: Option<u64>,
+pub struct HandoffConfig {
+    pub terminal_command: Option<String>,
+    pub editor_command: Option<String>,
+    pub agent_command: Option<String>,
+    pub global_claude_skills_dir: Option<String>,
+    pub project_claude_skills_dir_name: Option<String>,
+}
+
+impl Default for HandoffConfig {
+    fn default() -> Self {
+        Self {
+            terminal_command: Some("open -a Terminal".to_string()),
+            editor_command: None,
+            agent_command: Some("codex".to_string()),
+            global_claude_skills_dir: Some("~/.claude/skills".to_string()),
+            project_claude_skills_dir_name: Some(".claude/skills".to_string()),
+        }
+    }
 }
 
 pub fn app_settings_path() -> Option<PathBuf> {
@@ -84,48 +92,26 @@ pub fn save_app_config(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
-pub fn update_agent_runtime_from_payload(payload: &serde_json::Value) -> Result<AppConfig, String> {
+pub fn update_handoff_from_payload(payload: &serde_json::Value) -> Result<AppConfig, String> {
     let mut config = load_app_config();
-    let Some(agent_runtime) = payload
-        .get("agentRuntime")
-        .and_then(|value| value.as_object())
-    else {
+    let Some(handoff) = payload.get("handoff").and_then(|value| value.as_object()) else {
         return Ok(config);
     };
 
-    if let Some(value) = string_field(agent_runtime, "mode") {
-        config.agent_runtime.mode = value;
+    if let Some(value) = string_field(handoff, "terminalCommand") {
+        config.handoff.terminal_command = value;
     }
-    if let Some(value) = string_field(agent_runtime, "provider") {
-        config.agent_runtime.provider = value;
+    if let Some(value) = string_field(handoff, "editorCommand") {
+        config.handoff.editor_command = value;
     }
-    if let Some(value) = string_field(agent_runtime, "baseUrl") {
-        config.agent_runtime.base_url = value;
+    if let Some(value) = string_field(handoff, "agentCommand") {
+        config.handoff.agent_command = value;
     }
-    if let Some(value) = string_field(agent_runtime, "model") {
-        config.agent_runtime.model = value;
+    if let Some(value) = string_field(handoff, "globalClaudeSkillsDir") {
+        config.handoff.global_claude_skills_dir = value;
     }
-    if let Some(value) = string_field(agent_runtime, "nodeBinary") {
-        config.agent_runtime.node_binary = value;
-    }
-    if let Some(value) = string_field(agent_runtime, "sidecarScript") {
-        config.agent_runtime.sidecar_script = value;
-    }
-    if let Some(value) = positive_u64_field(agent_runtime, "timeoutSecs") {
-        config.agent_runtime.timeout_secs = value;
-    }
-    if let Some(value) = positive_u64_field(agent_runtime, "retryAttempts") {
-        config.agent_runtime.retry_attempts = value;
-    }
-
-    let clear_api_key = agent_runtime
-        .get("clearApiKey")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-    if clear_api_key {
-        config.agent_runtime.api_key = None;
-    } else if let Some(value) = string_field(agent_runtime, "apiKey") {
-        config.agent_runtime.api_key = value;
+    if let Some(value) = string_field(handoff, "projectClaudeSkillsDirName") {
+        config.handoff.project_claude_skills_dir_name = value;
     }
 
     save_app_config(&config)?;
@@ -149,21 +135,4 @@ fn string_field(
     } else {
         Some(Some(trimmed.to_string()))
     }
-}
-
-fn positive_u64_field(
-    object: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Option<Option<u64>> {
-    let value = object.get(key)?;
-    if value.is_null() {
-        return Some(None);
-    }
-    if let Some(number) = value.as_u64().filter(|number| *number > 0) {
-        return Some(Some(number));
-    }
-    if let Some(raw) = value.as_str() {
-        return Some(raw.trim().parse::<u64>().ok().filter(|number| *number > 0));
-    }
-    Some(None)
 }

@@ -25,16 +25,16 @@ export function ExplorerView() {
         <span className="explorer-path">{bootstrap.projectRoot.rootPath}</span>
         <button
           className="button-primary"
-          onClick={() => setCurrentScreen("create")}
+          onClick={() => setCurrentScreen("draft")}
           type="button"
         >
-          + 新建
+          + 导入
         </button>
       </div>
       <div className="explorer-list">
         {packages.length === 0 ? (
           <div className="explorer-empty">
-            <p className="muted">当前根目录下还没有 `.skills/` 内容。点击「+ 新建」创建第一个 skill。</p>
+            <p className="muted">当前根目录下还没有 `.skills/` 内容。点击「+ 导入」收纳第一个 skill。</p>
           </div>
         ) : (
           packages.map((item) => {

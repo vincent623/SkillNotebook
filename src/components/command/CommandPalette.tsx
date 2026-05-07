@@ -72,13 +72,13 @@ export function CommandPalette() {
 
     items.push(
       {
-        id: "create",
-        title: "生成 Skill",
-        subtitle: "从自然语言描述生成一个草稿包",
-        keywords: "create generate new skill",
+        id: "draft-import",
+        title: "导入 / 新建草稿",
+        subtitle: "导入候选 skill，或创建临时草稿工作区",
+        keywords: "draft import new skill",
         run: () => {
           if (!canLeaveDirtyEditor()) return;
-          setCurrentScreen("create");
+          setCurrentScreen("draft");
           handleClose();
         },
       },
@@ -105,6 +105,16 @@ export function CommandPalette() {
           run: async () => {
             await navigator.clipboard?.writeText(selectedPackage.rootPath);
             setNotice("已复制当前 Skill 路径");
+          },
+        },
+        {
+          id: "quick-reference",
+          title: "打开快速引用",
+          subtitle: selectedPackage.name,
+          keywords: "reference use copy link export",
+          run: () => {
+            handleClose();
+            window.dispatchEvent(new CustomEvent("skillnotebook:open-reference"));
           },
         },
         {

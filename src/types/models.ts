@@ -1,4 +1,4 @@
-export type AppScreen = "explorer" | "notebook" | "create" | "settings";
+export type AppScreen = "explorer" | "notebook" | "draft" | "settings";
 
 export type PackageStatus =
   | "draft"
@@ -160,34 +160,6 @@ export interface AppEnvelope<T> {
   error?: AppErrorPayload | null;
 }
 
-export interface CreationBridgeStatus {
-  mode: string;
-  preferredGenerator: string;
-  piSidecarAvailable: boolean;
-  piSidecarConfigured: boolean;
-  piNodeBinary: string;
-  piNodeResolvedPath?: string | null;
-  piSidecarScript?: string | null;
-  piSidecarScriptPath?: string | null;
-  agentProvider: string;
-  agentBaseUrl?: string | null;
-  agentBaseUrlConfigured: boolean;
-  agentApiKeyConfigured: boolean;
-  agentModel?: string | null;
-  agentTimeoutSecs: number;
-  agentRetryAttempts: number;
-  claudeCliAvailable: boolean;
-  skillCreateCommandAvailable: boolean;
-  claudeBinary: string;
-  claudeResolvedPath?: string | null;
-  skillCreateResolvedPath?: string | null;
-  claudeModel?: string | null;
-  claudeTimeoutSecs: number;
-  claudeRetryAttempts: number;
-  claudeRetryBackoffSecs: number;
-  fallbackGenerator: string;
-}
-
 export interface AppSettings {
   platform: string;
   shell: string[];
@@ -198,44 +170,19 @@ export interface AppSettings {
   currentProjectRoot: string;
   settingsPath?: string | null;
   recentProjectRoots: ProjectRoot[];
-  creationBridge: CreationBridgeStatus;
+  handoff: HandoffSettings;
 }
 
-export interface AgentRuntimeSettingsPayload {
-  mode?: string | null;
-  provider?: string | null;
-  baseUrl?: string | null;
-  apiKey?: string | null;
-  clearApiKey?: boolean;
-  model?: string | null;
-  nodeBinary?: string | null;
-  sidecarScript?: string | null;
-  timeoutSecs?: number | null;
-  retryAttempts?: number | null;
+export interface HandoffSettings {
+  terminalCommand?: string | null;
+  editorCommand?: string | null;
+  agentCommand?: string | null;
+  globalClaudeSkillsDir?: string | null;
+  projectClaudeSkillsDirName?: string | null;
 }
 
 export interface SettingsUpdatePayload {
-  agentRuntime?: AgentRuntimeSettingsPayload;
-}
-
-export interface CreatePackageFromNlRequest {
-  projectRootId: string;
-  prompt: string;
-  context?: string | null;
-}
-
-export interface CreatePackageFromSourcesRequest {
-  projectRootId: string;
-  sourcePaths: string[];
-  prompt?: string | null;
-  context?: string | null;
-}
-
-export interface CreatePackageFromUrlRequest {
-  projectRootId: string;
-  url: string;
-  prompt?: string | null;
-  context?: string | null;
+  handoff?: HandoffSettings;
 }
 
 export interface PackageUpdateRequest {
@@ -247,52 +194,90 @@ export interface PackageUpdateRequest {
   bundleCandidates?: string[] | null;
 }
 
-export interface CommitPackagePreviewRequest {
-  projectRootId: string;
-  previewId: string;
-}
-
-export interface DiscardPackagePreviewRequest {
-  projectRootId: string;
-  previewId: string;
-}
-
-export interface CreatePackageFromNlResponse {
-  packageId: string;
-  name: string;
-  slug: string;
-  rootPath: string;
-  evalWorkspacePath: string;
-  draftCreated: boolean;
-  autoEvalStarted: boolean;
-  validationSummary: string;
-  generatorUsed: string;
-  generationSummary: string;
-}
-
-export interface PackagePreviewFile {
-  path: string;
-  content: string;
-  encoding: "utf-8";
-}
-
-export interface CreatePackagePreviewResponse {
-  previewId: string;
-  projectRootId: string;
-  name: string;
-  slug: string;
-  description: string;
-  tags: string[];
-  files: PackagePreviewFile[];
-  fileTree: FileEntry[];
-  generatorUsed: string;
-  generationSummary: string;
-  createdAt: string;
-}
-
 export interface PackageExportArtifact {
   packageId: string;
   zipPath: string;
   sizeBytes: number;
   createdAt: string;
+}
+
+export type PackageReferenceItemKind = "path" | "snippet" | "command";
+
+export interface PackageReferenceItem {
+  id: string;
+  label: string;
+  value: string;
+  kind: PackageReferenceItemKind;
+}
+
+export interface PackageReferenceResponse {
+  packageId: string;
+  slug: string;
+  packagePath: string;
+  skillMdPath: string;
+  items: PackageReferenceItem[];
+}
+
+export interface PackageImportRequest {
+  projectRootId: string;
+  sourcePath: string;
+  slug?: string | null;
+  runEval?: boolean | null;
+}
+
+export interface PackageImportResponse {
+  packageId: string;
+  slug: string;
+  packagePath: string;
+  evalReport?: EvalReport | null;
+  evalCommand: string;
+  versionCommand: string;
+  referenceCommand: string;
+  importedAt: string;
+}
+
+export type DraftSourceKind = "text" | "files" | "url" | "empty";
+
+export interface DraftStartRequest {
+  projectRootId: string;
+  prompt?: string | null;
+  sourcePaths?: string[] | null;
+  sourceUrl?: string | null;
+  preferredAgentCommand?: string | null;
+}
+
+export interface DraftImportRequest {
+  projectRootId: string;
+  draftId: string;
+  runEval?: boolean | null;
+}
+
+export interface DraftDiscardRequest {
+  projectRootId: string;
+  draftId: string;
+}
+
+export interface DraftWorkspace {
+  draftId: string;
+  projectRootId: string;
+  draftPath: string;
+  briefPath: string;
+  intendedSlug: string;
+  sourceKind: DraftSourceKind;
+  sourceSummary: string;
+  suggestedCommand: string;
+  importCommand: string;
+  createdAt: string;
+}
+
+export interface DraftImportResponse {
+  draftId: string;
+  packageId: string;
+  slug: string;
+  packagePath: string;
+  evalReport?: EvalReport | null;
+  evalCommand: string;
+  versionCommand: string;
+  referenceCommand: string;
+  importedAt: string;
 }
