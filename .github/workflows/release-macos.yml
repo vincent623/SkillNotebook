@@ -66,7 +66,11 @@ jobs:
             tag_arg=(--tag "$RELEASE_TAG_INPUT")
           fi
 
-          npm run version:check -- "${tag_arg[@]}"
+          if [ "${#tag_arg[@]}" -gt 0 ]; then
+            npm run version:check -- "${tag_arg[@]}"
+          else
+            npm run version:check
+          fi
 
       - name: Install Python validation dependencies
         run: |
