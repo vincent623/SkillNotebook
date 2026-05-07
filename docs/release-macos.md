@@ -19,7 +19,9 @@ The workflow is defined in `.github/workflows/release-macos.yml`.
 The CI validation path runs:
 
 ```bash
-python3 -m pip install --user PyYAML
+python3 -m venv "$RUNNER_TEMP/skillnotebook-python"
+"$RUNNER_TEMP/skillnotebook-python/bin/python" -m pip install PyYAML
+echo "$RUNNER_TEMP/skillnotebook-python/bin" >> "$GITHUB_PATH"
 npm run lint
 npm run build
 npm run test:e2e
