@@ -10,3 +10,8 @@ src-tauri/.cargo
 .claude/
 .playwright-cli/
 *.log
+
+# Local E2E and manual workflow leftovers.
+examples/project-root/.42eval/workflow-skill/
+examples/project-root/.skill-notebook/create-previews/
+examples/project-root/.skills/workflow-skill/
