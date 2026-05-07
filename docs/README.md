@@ -11,3 +11,7 @@ Canonical product and engineering specifications live under `.42cog/`:
 Current runnable UI design baseline:
 
 - `docs/skillnotebook/`
+
+Release operations:
+
+- `docs/release-macos.md`

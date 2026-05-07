@@ -1,0 +1,236 @@
+name: macOS Package
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional tag to create or update a GitHub Release, for example v0.4.2. Leave empty to build artifacts only."
+        required: false
+        type: string
+      draft:
+        description: "Create a draft release when release_tag is provided manually."
+        required: true
+        default: true
+        type: boolean
+      prerelease:
+        description: "Mark the manual release as a prerelease."
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install chromium
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Run browser and CLI E2E checks
+        run: npm run test:e2e
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  package-macos:
+    name: Package ${{ matrix.label }}
+    needs: validate
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: apple-silicon
+            target: aarch64-apple-darwin
+          - label: intel
+            target: x86_64-apple-darwin
+    env:
+      CI: true
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prepare App Store Connect API key
+        run: |
+          if [ -n "$APPLE_API_PRIVATE_KEY" ] && [ -n "$APPLE_API_KEY" ]; then
+            key_dir="$RUNNER_TEMP/private_keys"
+            key_path="$key_dir/AuthKey_${APPLE_API_KEY}.p8"
+            mkdir -p "$key_dir"
+            printf '%s' "$APPLE_API_PRIVATE_KEY" > "$key_path"
+            chmod 600 "$key_path"
+            echo "APPLE_API_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build Tauri bundle
+        run: npm run tauri:build -- --target ${{ matrix.target }}
+
+      - name: Verify and collect macOS artifacts
+        run: |
+          set -euo pipefail
+
+          bundle_root="src-tauri/target/${{ matrix.target }}/release/bundle"
+          if [ ! -d "$bundle_root" ]; then
+            bundle_root="src-tauri/target/release/bundle"
+          fi
+
+          app_path="$(find "$bundle_root/macos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          dmg_path="$(find "$bundle_root/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+
+          if [ -z "$app_path" ] || [ -z "$dmg_path" ]; then
+            echo "Expected app and DMG artifacts were not created under $bundle_root" >&2
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          hdiutil verify "$dmg_path"
+
+          mkdir -p release-assets
+          asset_name="$(basename "$dmg_path" | tr ' ' '.')"
+          cp "$dmg_path" "release-assets/$asset_name"
+          shasum -a 256 "release-assets/$asset_name" > "release-assets/$asset_name.sha256"
+
+          if [ "$APPLE_SIGNING_IDENTITY" = "-" ]; then
+            echo "ad-hoc" > "release-assets/signing-mode-${{ matrix.label }}.txt"
+          else
+            xcrun stapler validate "$dmg_path"
+            echo "developer-id-notarized" > "release-assets/signing-mode-${{ matrix.label }}.txt"
+          fi
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-package-${{ matrix.label }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: package-macos
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || '' }}
+      RELEASE_DRAFT_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+      RELEASE_PRERELEASE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create or update release
+        run: |
+          set -euo pipefail
+
+          tag_name="${GITHUB_REF_NAME}"
+          if [ -n "$RELEASE_TAG_INPUT" ]; then
+            tag_name="$RELEASE_TAG_INPUT"
+          fi
+
+          if [ -z "$tag_name" ]; then
+            echo "No release tag was provided." >&2
+            exit 1
+          fi
+
+          if grep -q '^developer-id-notarized$' release-assets/signing-mode-*.txt 2>/dev/null; then
+            signing_note="Developer ID signing and notarization were enabled; stapler validation passed in CI."
+          else
+            signing_note="This package is ad-hoc signed because Apple Developer ID secrets are not configured. It is suitable for internal testing, but macOS Gatekeeper may still require right-click Open or Privacy & Security approval."
+          fi
+
+          cat > release-notes.md <<EOF
+          Automated macOS package build for SkillNotebook.
+
+          ${signing_note}
+
+          Validation in CI:
+          - npm run lint
+          - npm run build
+          - npm run test:e2e
+          - cargo test --manifest-path src-tauri/Cargo.toml
+          - npm run tauri:build
+          - codesign --verify --deep --strict
+          - hdiutil verify
+          EOF
+
+          create_flags=()
+          if [ "$RELEASE_DRAFT_INPUT" = "true" ]; then
+            create_flags+=(--draft)
+          fi
+          if [ "$RELEASE_PRERELEASE_INPUT" = "true" ]; then
+            create_flags+=(--prerelease)
+          fi
+
+          if gh release view "$tag_name" >/dev/null 2>&1; then
+            echo "Release $tag_name already exists; uploading assets with --clobber."
+            gh release edit "$tag_name" \
+              --title "Skill Notebook ${tag_name#v}" \
+              --notes-file release-notes.md
+          else
+            gh release create "$tag_name" \
+              --target "$GITHUB_SHA" \
+              --title "Skill Notebook ${tag_name#v}" \
+              --notes-file release-notes.md \
+              "${create_flags[@]}"
+          fi
+
+          assets=(release-assets/*.dmg release-assets/*.sha256)
+          gh release upload "$tag_name" "${assets[@]}" --clobber
