@@ -46,11 +46,50 @@ For internal testing, users can open the app with right-click > Open, or approve
 it from System Settings > Privacy & Security after macOS blocks the first launch.
 Do not describe the ad-hoc package as fully trusted or notarized.
 
+## Semantic Versioning
+
+SkillNotebook uses Semantic Versioning 2.0.0. The app version must be identical
+in all release metadata files:
+
+- `package.json`
+- `package-lock.json`
+- `src-tauri/Cargo.toml`
+- `src-tauri/Cargo.lock`
+- `src-tauri/tauri.conf.json`
+
+Release tags must be `v`-prefixed SemVer tags and must match the app version
+exactly. For example, app version `0.4.2` must be released with tag `v0.4.2`.
+
+During the `0.x` phase:
+
+- Use `PATCH` for compatible fixes, CI/CD changes, copy polish, and packaging
+  improvements.
+- Use `MINOR` for new product capabilities or meaningful workflow changes.
+- Reserve `MAJOR` for the future `1.0.0` compatibility baseline.
+
+Useful commands:
+
+```bash
+npm run version:check
+npm run version:set -- 0.4.2
+npm run version:check -- --tag v0.4.2
+```
+
+CI runs the version check automatically. Tag-triggered and manual release runs
+fail if the release tag is not valid SemVer or does not match the app version.
+
 ## Release a New Package
 
-1. Bump the app version in all version files.
-2. Commit and push the change to `main`.
-3. Create and push a matching tag:
+1. Choose the SemVer bump.
+2. Bump all version files:
+
+```bash
+npm run version:set -- 0.4.2
+npm run version:check -- --tag v0.4.2
+```
+
+3. Commit and push the change to `main`.
+4. Create and push the matching tag:
 
 ```bash
 git tag v0.4.2
@@ -122,8 +161,8 @@ For local release triage:
 ```bash
 security find-identity -v -p codesigning
 codesign --verify --deep --strict --verbose=2 "src-tauri/target/release/bundle/macos/Skill Notebook.app"
-hdiutil verify "src-tauri/target/release/bundle/dmg/Skill Notebook_0.4.1_aarch64.dmg"
-xcrun stapler validate "src-tauri/target/release/bundle/dmg/Skill Notebook_0.4.1_aarch64.dmg"
+hdiutil verify "src-tauri/target/release/bundle/dmg/Skill Notebook_0.4.2_aarch64.dmg"
+xcrun stapler validate "src-tauri/target/release/bundle/dmg/Skill Notebook_0.4.2_aarch64.dmg"
 ```
 
 The `stapler validate` command is expected to fail for ad-hoc packages.

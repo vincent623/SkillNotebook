@@ -53,6 +53,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Validate Semantic Versioning metadata
+        env:
+          RELEASE_TAG_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || '' }}
+        run: |
+          set -euo pipefail
+
+          tag_arg=()
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag_arg=(--tag "$GITHUB_REF_NAME")
+          elif [ -n "$RELEASE_TAG_INPUT" ]; then
+            tag_arg=(--tag "$RELEASE_TAG_INPUT")
+          fi
+
+          npm run version:check -- "${tag_arg[@]}"
+
       - name: Install Python validation dependencies
         run: |
           python3 -m venv "$RUNNER_TEMP/skillnotebook-python"

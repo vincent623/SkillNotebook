@@ -2,6 +2,27 @@
 
 This project uses Semantic Versioning.
 
+## [0.4.2] - 2026-05-07
+
+### Added
+
+- GitHub Actions macOS packaging for Apple Silicon and Intel DMG artifacts.
+- Optional GitHub Release publishing from matching SemVer tags.
+- SemVer helper scripts for checking and updating all app version files.
+
+### Changed
+
+- CI now validates that release tags are `v`-prefixed SemVer and match the app
+  version exactly.
+- macOS packaging defaults to ad-hoc signing when Apple Developer ID secrets are
+  not configured, while preserving the notarized path for future paid releases.
+
+### Validation
+
+- `npm run version:check -- --tag v0.4.2`
+- GitHub Actions validates `lint`, frontend build, browser/CLI E2E, Rust tests,
+  Tauri build, code signing verification, and DMG verification.
+
 ## [0.1.0] - 2026-04-29
 
 Initial V1 acceptance release.

@@ -1,6 +1,6 @@
 [package]
 name = "skill-notebook"
-version = "0.4.1"
+version = "0.4.2"
 description = "macOS-first local skill management workbench"
 authors = ["vbot"]
 license = ""
