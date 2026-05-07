@@ -19,6 +19,7 @@ The workflow is defined in `.github/workflows/release-macos.yml`.
 The CI validation path runs:
 
 ```bash
+python3 -m pip install --user PyYAML
 npm run lint
 npm run build
 npm run test:e2e
