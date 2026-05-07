@@ -304,12 +304,12 @@ export default function App() {
             <kbd>⌘K</kbd>
           </button>
           <button
-            className="topbar-draft"
+            className={`topbar-draft ${currentScreen === "draft" ? "is-active" : ""}`}
             onClick={() => requestScreen("draft")}
             type="button"
           >
             <WandIcon />
-            导入 / 草稿
+            导入
           </button>
           <button
             className="topbar-icon-button"
@@ -344,11 +344,11 @@ export default function App() {
       </header>
 
       <div className="window-stage">
-        {(currentScreen === "explorer" || currentScreen === "notebook") && <WorkbenchView />}
-        {currentScreen === "draft" && <DraftImportView />}
-        {currentScreen === "settings" && <SettingsPage />}
+        <WorkbenchView />
       </div>
       <CommandPalette />
+      {currentScreen === "draft" && <DraftImportView />}
+      {currentScreen === "settings" && <SettingsPage />}
       {exportOpen && bootstrap && selectedPackage ? (
         <QuickReferenceModal
           onClose={() => setExportOpen(false)}

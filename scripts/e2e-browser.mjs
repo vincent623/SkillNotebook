@@ -95,22 +95,23 @@ async function main() {
     });
 
     await page.goto(url, { waitUntil: "networkidle" });
-    await page.getByRole("button", { name: "导入 / 草稿" }).click();
-    await page.getByRole("heading", { name: "导入或新建草稿" }).waitFor();
-    await page.getByText("Skill Notebook 不在这里生成 skill").waitFor();
+    await page.getByRole("button", { name: "导入" }).click();
+    await page.getByRole("heading", { name: "导入" }).waitFor();
+    await page.getByText("选择一个包含 SKILL.md 的目录").waitFor();
 
-    await page.getByRole("button", { name: "新建草稿" }).click();
+    await page.getByRole("button", { name: "草稿交接" }).click();
     await page.getByRole("textbox", { name: "草稿目标" }).fill("把会议纪要整理成负责人、截止日期、风险和行动项");
-    await page.getByRole("button", { name: "创建草稿工作区" }).click();
+    await page.getByRole("button", { name: "创建草稿" }).click();
     await page.getByText(/已创建草稿/).waitFor();
     await page.getByText("Draft workspace").waitFor();
     await page.getByText("交给外部 Agent").waitFor();
+    await page.getByRole("button", { name: "关闭" }).click();
 
     await page.getByRole("button", { name: "快速引用" }).click();
-    await page.getByRole("dialog", { name: "快速引用 / 使用" }).waitFor();
+    await page.getByRole("dialog", { name: "快速引用" }).waitFor();
     await page.getByText("Quick reference").waitFor();
-    await page.getByText("Markdown reference").waitFor();
-    await page.getByText("CLI reference").waitFor();
+    await page.getByText("Markdown 引用").waitFor();
+    await page.getByText("CLI 引用").waitFor();
 
     assert(consoleErrors.length === 0, `browser console errors:\n${consoleErrors.join("\n")}`);
     console.log("E2E browser passed: draft UI -> quick reference modal");

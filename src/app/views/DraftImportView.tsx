@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { BackButton } from "../../components/common/BackButton";
 import {
   discardDraft,
   importDraft,
@@ -89,6 +88,14 @@ export function DraftImportView() {
       cancelled = true;
     };
   }, [lastDraft, status]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCurrentScreen("explorer");
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [setCurrentScreen]);
 
   async function refreshDrafts() {
     try {
@@ -196,20 +203,31 @@ export function DraftImportView() {
   }
 
   return (
-    <section className="draft-import-view">
-      <BackButton />
-      <div className="draft-import-flow">
-        <aside className="content-card draft-import-form-panel">
-          <div className="draft-import-heading">
-            <span className="field-label">Draft / Import</span>
-            <h2 className="draft-import-title">导入或新建草稿</h2>
+    <section className="draft-import-view" onClick={() => setCurrentScreen("explorer")} role="presentation">
+      <div
+        aria-labelledby="draft-import-title"
+        aria-modal="true"
+        className="draft-import-dialog"
+        onClick={(event) => event.stopPropagation()}
+        role="dialog"
+      >
+        <header className="draft-import-shell-header">
+          <div>
+            <span className="field-label">Import</span>
+            <h2 className="draft-import-title" id="draft-import-title">导入</h2>
           </div>
+          <button className="button-secondary draft-import-close" onClick={() => setCurrentScreen("explorer")} type="button">
+            关闭
+          </button>
+        </header>
+        <div className="draft-import-flow">
+          <aside className="draft-import-form-panel">
           <div className="draft-import-mode-tabs" aria-label="草稿和导入">
             <button className={mode === "import" ? "is-active" : ""} onClick={() => setMode("import")} type="button">
-              导入 Skill
+              候选包
             </button>
             <button className={mode === "draft" ? "is-active" : ""} onClick={() => setMode("draft")} type="button">
-              新建草稿
+              草稿交接
             </button>
           </div>
 
@@ -223,7 +241,6 @@ export function DraftImportView() {
                   placeholder={`${bootstrap?.projectRoot.rootPath ?? "/absolute/path"}/some-skill`}
                   value={sourcePath}
                 />
-                <span className="draft-import-field-hint">目录必须包含 SKILL.md。导入后会复制到当前项目的 .skills/。</span>
               </label>
               <label className="field-stack">
                 <span className="field-label">slug（可选）</span>
@@ -249,7 +266,7 @@ export function DraftImportView() {
                   onClick={() => { void handleImportPackage(); }}
                   type="button"
                 >
-                  {status === "submitting" ? "导入中..." : "导入到 .skills/"}
+                  {status === "submitting" ? "导入中..." : "导入"}
                 </button>
               </div>
             </>
@@ -260,7 +277,7 @@ export function DraftImportView() {
                 <textarea
                   className="form-textarea"
                   onChange={(event) => setDraftPrompt(event.target.value)}
-                  placeholder="例：把会议纪要整理为负责人、截止日期、风险和行动项。"
+                  placeholder="把会议纪要整理为行动项、负责人和风险"
                   rows={4}
                   value={draftPrompt}
                 />
@@ -300,7 +317,7 @@ export function DraftImportView() {
                   onClick={() => { void handleStartDraft(); }}
                   type="button"
                 >
-                  {status === "submitting" ? "创建中..." : "创建草稿工作区"}
+                  {status === "submitting" ? "创建中..." : "创建草稿"}
                 </button>
               </div>
             </>
@@ -310,9 +327,9 @@ export function DraftImportView() {
           {errorMessage ? <div className="inline-banner inline-banner-error">{errorMessage}</div> : null}
         </aside>
 
-        <section className="draft-import-preview-panel has-preview">
+        <section className="draft-import-preview-panel">
           {lastDraft ? (
-            <article className="content-card">
+            <article className="draft-import-result">
               <span className="field-label">Last draft</span>
               <h3>{lastDraft.intendedSlug}</h3>
               <p className="muted">{lastDraft.sourceSummary}</p>
@@ -344,14 +361,14 @@ export function DraftImportView() {
               </div>
             </article>
           ) : (
-            <div className="workbench-empty-pane is-large">
-              <strong>Skill Notebook 不在这里生成 skill</strong>
-              <span>这里负责导入候选包，或创建临时草稿目录并交给 Claude/Codex/OpenClaw。</span>
+            <div className="draft-import-empty">
+              <strong>{mode === "import" ? "选择一个包含 SKILL.md 的目录" : "创建临时目录，交给外部 Agent"}</strong>
+              <span>{mode === "import" ? "导入后会出现在左侧库中。" : "完成后从这里导入回 .skills/。"}</span>
             </div>
           )}
 
-          <article className="content-card" style={{ marginTop: 16 }}>
-            <span className="field-label">Active drafts</span>
+          <article className="draft-import-result draft-import-drafts">
+            <span className="field-label">Drafts</span>
             <h3>草稿工作区</h3>
             {drafts.length === 0 ? (
               <p className="muted" style={{ marginTop: 8 }}>暂无草稿。</p>
@@ -366,7 +383,7 @@ export function DraftImportView() {
                       </div>
                       <div className="settings-action-row">
                         <button className="button-secondary reference-copy-btn" onClick={() => { void copyText(draft.suggestedCommand); }} type="button">
-                          复制命令
+                          复制
                         </button>
                         <button className="button-secondary reference-copy-btn" onClick={() => { void handleImportDraft(draft); }} type="button">
                           导入
@@ -383,6 +400,7 @@ export function DraftImportView() {
             )}
           </article>
         </section>
+      </div>
       </div>
     </section>
   );

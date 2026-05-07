@@ -73,8 +73,8 @@ export function CommandPalette() {
     items.push(
       {
         id: "draft-import",
-        title: "导入 / 新建草稿",
-        subtitle: "导入候选 skill，或创建临时草稿工作区",
+        title: "导入",
+        subtitle: "候选包或草稿交接",
         keywords: "draft import new skill",
         run: () => {
           if (!canLeaveDirtyEditor()) return;
@@ -84,8 +84,8 @@ export function CommandPalette() {
       },
       {
         id: "settings",
-        title: "打开设置",
-        subtitle: "切换项目根目录、查看运行配置",
+        title: "设置",
+        subtitle: "项目根目录与本地交接",
         keywords: "settings project root",
         run: () => {
           if (!canLeaveDirtyEditor()) return;
