@@ -12,6 +12,7 @@ use crate::domain::package::{
 use crate::domain::preview::PreviewModel;
 use crate::domain::project_root::ProjectRoot;
 use crate::domain::version::PackageVersion;
+use crate::utils::errors::AppError;
 use crate::utils::ids::slugify;
 
 #[derive(Debug, Clone)]
@@ -47,7 +48,7 @@ pub fn default_project_root() -> PathBuf {
         .join("project-root")
 }
 
-pub fn scan_project_root(root_path: Option<&str>) -> Result<ScannedProjectRoot, String> {
+pub fn scan_project_root(root_path: Option<&str>) -> Result<ScannedProjectRoot, AppError> {
     let project_root_path = resolve_project_root(root_path);
     let project_root = read_project_root(&project_root_path)?;
     let skills_root = locate_skills_root(&project_root_path)?;
@@ -135,15 +136,15 @@ pub fn scan_project_root(root_path: Option<&str>) -> Result<ScannedProjectRoot, 
 pub fn project_root_for_id(
     project_root_id: &str,
     root_path: Option<&str>,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, AppError> {
     let scanned = scan_project_root(root_path)?;
     if scanned.project_root.id == project_root_id {
         Ok(PathBuf::from(scanned.project_root.root_path))
     } else {
-        Err(format!(
+        Err(AppError::Other(format!(
             "project root id mismatch: expected {}, found {}",
             project_root_id, scanned.project_root.id
-        ))
+        )))
     }
 }
 
@@ -151,65 +152,97 @@ pub fn canonical_skills_root(project_root_path: &Path) -> PathBuf {
     project_root_path.join(CANONICAL_SKILLS_DIR)
 }
 
-pub fn locate_skills_root(project_root_path: &Path) -> Result<PathBuf, String> {
+pub fn find_package_root_by_id(
+    package_id: &str,
+    root_path: Option<&str>,
+) -> Result<PathBuf, AppError> {
+    let project_root_path = resolve_project_root(root_path);
+    let skills_root = locate_skills_root(&project_root_path)?;
+
+    for entry in fs::read_dir(&skills_root)? {
+        let dir = entry?.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let notebook_path = dir.join("notebook.json");
+        if !notebook_path.exists() {
+            continue;
+        }
+        let notebook: PackageNotebookDocument = read_json_file(&notebook_path)?;
+        let slug = dir
+            .file_name()
+            .map(|v| v.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let resolved_id = if notebook.id.trim().is_empty() {
+            slugify(&slug)
+        } else {
+            notebook.id.clone()
+        };
+        if resolved_id == package_id {
+            return Ok(dir);
+        }
+    }
+
+    Err(AppError::NotFound {
+        entity: "package".into(),
+        identifier: package_id.into(),
+    })
+}
+
+pub fn locate_skills_root(project_root_path: &Path) -> Result<PathBuf, AppError> {
     let canonical = canonical_skills_root(project_root_path);
     if canonical.exists() {
         return Ok(canonical);
     }
 
-    Err(format!(
+    Err(AppError::Other(format!(
         "skill root not found under {}. Expected {}/.",
         project_root_path.display(),
         CANONICAL_SKILLS_DIR
-    ))
+    )))
 }
 
-pub fn load_package_notebook(package_dir: &Path) -> Result<PackageNotebookDocument, String> {
+pub fn load_package_notebook(package_dir: &Path) -> Result<PackageNotebookDocument, AppError> {
     read_json_file(&package_dir.join("notebook.json"))
 }
 
 pub fn save_package_notebook(
     package_dir: &Path,
     notebook: &PackageNotebookDocument,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     write_json_file(&package_dir.join("notebook.json"), notebook)
 }
 
-pub fn ensure_directory(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(path)
-        .map_err(|error| format!("failed to create directory {}: {}", path.display(), error))
+pub fn ensure_directory(path: &Path) -> Result<(), AppError> {
+    fs::create_dir_all(path)?;
+    Ok(())
 }
 
-pub fn write_json_file<T>(path: &Path, value: &T) -> Result<(), String>
+pub fn write_json_file<T>(path: &Path, value: &T) -> Result<(), AppError>
 where
     T: Serialize,
 {
-    let content = serde_json::to_string_pretty(value)
-        .map_err(|error| format!("failed to serialize {}: {}", path.display(), error))?;
+    let content = serde_json::to_string_pretty(value)?;
     write_text_file(path, &format!("{}\n", content))
 }
 
-pub fn write_text_file(path: &Path, content: &str) -> Result<(), String> {
+pub fn write_text_file(path: &Path, content: &str) -> Result<(), AppError> {
     if let Some(parent) = path.parent() {
         ensure_directory(parent)?;
     }
 
-    fs::write(path, content)
-        .map_err(|error| format!("failed to write {}: {}", path.display(), error))
+    fs::write(path, content)?;
+    Ok(())
 }
 
-pub fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+pub fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(), AppError> {
     ensure_directory(destination)?;
 
-    for entry in fs::read_dir(source)
-        .map_err(|error| format!("failed to read directory {}: {}", source.display(), error))?
-    {
-        let path = entry
-            .map_err(|error| format!("failed to inspect directory entry: {}", error))?
-            .path();
+    for entry in fs::read_dir(source)? {
+        let path = entry?.path();
         let destination_path = destination.join(
             path.file_name()
-                .ok_or_else(|| format!("missing file name for {}", path.display()))?,
+                .ok_or_else(|| AppError::Other(format!("missing file name for {}", path.display())))?,
         );
 
         if path.is_dir() {
@@ -219,45 +252,36 @@ pub fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(),
                 ensure_directory(parent)?;
             }
 
-            fs::copy(&path, &destination_path).map_err(|error| {
-                format!(
-                    "failed to copy {} to {}: {}",
-                    path.display(),
-                    destination_path.display(),
-                    error
-                )
-            })?;
+            fs::copy(&path, &destination_path)?;
         }
     }
 
     Ok(())
 }
 
-pub fn list_package_file_tree(package_root: &Path) -> Result<Vec<PackageFileEntry>, String> {
+pub fn list_package_file_tree(package_root: &Path) -> Result<Vec<PackageFileEntry>, AppError> {
     build_package_file_entries(package_root, package_root)
 }
 
 pub fn read_package_text_file(
     package_root: &Path,
     relative_path: &str,
-) -> Result<PackageFileContent, String> {
+) -> Result<PackageFileContent, AppError> {
     let (normalized_path, absolute_path) = resolve_package_text_path(package_root, relative_path)?;
-    let metadata = fs::symlink_metadata(&absolute_path)
-        .map_err(|error| format!("failed to inspect {}: {}", absolute_path.display(), error))?;
+    let metadata = fs::symlink_metadata(&absolute_path)?;
 
     if metadata.file_type().is_symlink() {
-        return Err(format!(
+        return Err(AppError::Other(format!(
             "refusing to read symlinked file inside package: {}",
             normalized_path
-        ));
+        )));
     }
 
     if !metadata.is_file() {
-        return Err(format!("package path is not a file: {}", normalized_path));
+        return Err(AppError::Other(format!("package path is not a file: {}", normalized_path)));
     }
 
-    let content = fs::read_to_string(&absolute_path)
-        .map_err(|error| format!("failed to read {}: {}", absolute_path.display(), error))?;
+    let content = fs::read_to_string(&absolute_path)?;
 
     Ok(PackageFileContent {
         path: normalized_path,
@@ -270,15 +294,14 @@ pub fn write_package_text_file(
     package_root: &Path,
     relative_path: &str,
     content: &str,
-) -> Result<PackageFileContent, String> {
+) -> Result<PackageFileContent, AppError> {
     let (normalized_path, absolute_path) = resolve_package_text_path(package_root, relative_path)?;
 
     if let Some(parent) = absolute_path.parent() {
         ensure_directory(parent)?;
     }
 
-    fs::write(&absolute_path, content)
-        .map_err(|error| format!("failed to write {}: {}", absolute_path.display(), error))?;
+    fs::write(&absolute_path, content)?;
 
     Ok(PackageFileContent {
         path: normalized_path,
@@ -298,9 +321,8 @@ fn resolve_project_root(root_path: Option<&str>) -> PathBuf {
 fn build_package_file_entries(
     package_root: &Path,
     current: &Path,
-) -> Result<Vec<PackageFileEntry>, String> {
-    let mut entries = fs::read_dir(current)
-        .map_err(|error| format!("failed to read directory {}: {}", current.display(), error))?
+) -> Result<Vec<PackageFileEntry>, AppError> {
+    let mut entries = fs::read_dir(current)?
         .filter_map(|entry| entry.ok())
         .filter_map(|entry| {
             let path = entry.path();
@@ -326,16 +348,14 @@ fn build_package_file_entries(
     let mut tree = Vec::new();
 
     for (name, path) in entries {
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|error| format!("failed to inspect {}: {}", path.display(), error))?;
+        let metadata = fs::symlink_metadata(&path)?;
 
         if metadata.file_type().is_symlink() {
             continue;
         }
 
         let relative = path
-            .strip_prefix(package_root)
-            .map_err(|error| format!("failed to compute relative path: {}", error))?
+            .strip_prefix(package_root)?
             .to_string_lossy()
             .to_string();
 
@@ -367,7 +387,7 @@ fn should_skip_package_entry(name: &str) -> bool {
 fn resolve_package_text_path(
     package_root: &Path,
     relative_path: &str,
-) -> Result<(String, PathBuf), String> {
+) -> Result<(String, PathBuf), AppError> {
     let cleaned = sanitize_package_relative_path(relative_path)?;
     let normalized = cleaned.to_string_lossy().to_string();
     let absolute = package_root.join(&cleaned);
@@ -375,15 +395,15 @@ fn resolve_package_text_path(
     Ok((normalized, absolute))
 }
 
-fn sanitize_package_relative_path(relative_path: &str) -> Result<PathBuf, String> {
+fn sanitize_package_relative_path(relative_path: &str) -> Result<PathBuf, AppError> {
     let raw = relative_path.trim();
     if raw.is_empty() {
-        return Err("package file path cannot be empty".to_string());
+        return Err(AppError::Other("package file path cannot be empty".to_string()));
     }
 
     let candidate = Path::new(raw);
     if candidate.is_absolute() {
-        return Err(format!("absolute paths are not allowed: {}", raw));
+        return Err(AppError::InvalidPath(format!("absolute paths are not allowed: {}", raw)));
     }
 
     let mut cleaned = PathBuf::new();
@@ -392,31 +412,31 @@ fn sanitize_package_relative_path(relative_path: &str) -> Result<PathBuf, String
             Component::Normal(part) => {
                 let value = part.to_string_lossy().to_string();
                 if should_skip_package_entry(&value) {
-                    return Err(format!("package file is not editable: {}", raw));
+                    return Err(AppError::InvalidPath(format!("package file is not editable: {}", raw)));
                 }
                 cleaned.push(part);
             }
             Component::CurDir => {}
             Component::ParentDir => {
-                return Err(format!(
+                return Err(AppError::InvalidPath(format!(
                     "parent directory traversal is not allowed: {}",
                     raw
-                ))
+                )))
             }
             Component::RootDir | Component::Prefix(_) => {
-                return Err(format!("absolute paths are not allowed: {}", raw))
+                return Err(AppError::InvalidPath(format!("absolute paths are not allowed: {}", raw)))
             }
         }
     }
 
     if cleaned.as_os_str().is_empty() {
-        return Err(format!("invalid package file path: {}", raw));
+        return Err(AppError::InvalidPath(format!("invalid package file path: {}", raw)));
     }
 
     Ok(cleaned)
 }
 
-fn read_project_root(root_path: &Path) -> Result<ProjectRoot, String> {
+fn read_project_root(root_path: &Path) -> Result<ProjectRoot, AppError> {
     let config_path = root_path.join(".skill-notebook").join("config.json");
     let config: ProjectRootConfigFile = if config_path.exists() {
         read_json_file(&config_path)?
@@ -450,7 +470,7 @@ fn build_preview(
     package_dir: &Path,
     package_id: &str,
     package_name: &str,
-) -> Result<PreviewModel, String> {
+) -> Result<PreviewModel, AppError> {
     let skill_path = package_dir.join("SKILL.md");
     let prompt_files = list_files(package_dir, "prompts")?;
     let example_files = list_files(package_dir, "examples")?;
@@ -493,9 +513,8 @@ fn build_preview(
     })
 }
 
-fn list_directories(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut directories = fs::read_dir(root)
-        .map_err(|error| format!("failed to read directory {}: {}", root.display(), error))?
+fn list_directories(root: &Path) -> Result<Vec<PathBuf>, AppError> {
+    let mut directories = fs::read_dir(root)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter(|path| path.is_dir())
@@ -514,7 +533,7 @@ fn list_directories(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(directories)
 }
 
-fn list_files(package_root: &Path, subdir: &str) -> Result<Vec<String>, String> {
+fn list_files(package_root: &Path, subdir: &str) -> Result<Vec<String>, AppError> {
     let dir = package_root.join(subdir);
     if !dir.exists() {
         return Ok(Vec::new());
@@ -531,13 +550,9 @@ fn collect_files(
     package_root: &Path,
     current: &Path,
     files: &mut Vec<String>,
-) -> Result<(), String> {
-    for entry in fs::read_dir(current)
-        .map_err(|error| format!("failed to read directory {}: {}", current.display(), error))?
-    {
-        let path = entry
-            .map_err(|error| format!("failed to inspect directory entry: {}", error))?
-            .path();
+) -> Result<(), AppError> {
+    for entry in fs::read_dir(current)? {
+        let path = entry?.path();
 
         if path.is_dir() {
             collect_files(package_root, &path, files)?;
@@ -545,8 +560,7 @@ fn collect_files(
         }
 
         let relative = path
-            .strip_prefix(package_root)
-            .map_err(|error| format!("failed to compute relative path: {}", error))?
+            .strip_prefix(package_root)?
             .to_string_lossy()
             .to_string();
         files.push(relative);
@@ -555,21 +569,19 @@ fn collect_files(
     Ok(())
 }
 
-fn preview_text(path: &Path, limit: usize) -> Result<String, String> {
-    let content = fs::read_to_string(path)
-        .map_err(|error| format!("failed to read preview file {}: {}", path.display(), error))?;
+fn preview_text(path: &Path, limit: usize) -> Result<String, AppError> {
+    let content = fs::read_to_string(path)?;
     Ok(truncate_preview(&content, limit))
 }
 
 fn truncate_preview(content: &str, limit: usize) -> String {
     let compact = content.split_whitespace().collect::<Vec<_>>().join(" ");
-    let mut truncated = compact.chars().take(limit).collect::<String>();
-
+    let taken: String = compact.chars().take(limit).collect();
     if compact.chars().count() > limit {
-        truncated.push_str("...");
+        format!("{taken}...")
+    } else {
+        taken
     }
-
-    truncated
 }
 
 fn fallback_string(value: &str, fallback: &str) -> String {
@@ -580,14 +592,12 @@ fn fallback_string(value: &str, fallback: &str) -> String {
     }
 }
 
-fn read_json_file<T>(path: &Path) -> Result<T, String>
+fn read_json_file<T>(path: &Path) -> Result<T, AppError>
 where
     T: DeserializeOwned,
 {
-    let content = fs::read_to_string(path)
-        .map_err(|error| format!("failed to read {}: {}", path.display(), error))?;
-    serde_json::from_str(&content)
-        .map_err(|error| format!("failed to parse {}: {}", path.display(), error))
+    let content = fs::read_to_string(path)?;
+    Ok(serde_json::from_str(&content)?)
 }
 
 #[cfg(test)]
@@ -596,31 +606,9 @@ mod tests {
         list_package_file_tree, read_package_text_file, scan_project_root, write_package_text_file,
     };
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     use crate::storage::filesystem;
-
-    fn tmp_project_root_path() -> PathBuf {
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "skill-notebook-filesystem-test-{}-{}",
-            std::process::id(),
-            seed
-        ))
-    }
-
-    fn copy_example_project_root(destination: &PathBuf) -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("examples")
-            .join("project-root");
-        filesystem::copy_directory_recursive(&root, destination).expect("copy project_root");
-        destination.clone()
-    }
+    use crate::test_helpers::{copy_example_project_root, tmp_project_root_path};
 
     #[test]
     fn scans_the_default_example_workspace() {
@@ -710,10 +698,10 @@ mod tests {
 
         let traversal = read_package_text_file(&package_root, "../outside.txt")
             .expect_err("traversal path should fail");
-        assert!(traversal.contains("traversal"));
+        assert!(traversal.to_string().contains("traversal"));
 
         let hidden = read_package_text_file(&package_root, "notebook.json")
             .expect_err("metadata file should be blocked");
-        assert!(hidden.contains("not editable"));
+        assert!(hidden.to_string().contains("not editable"));
     }
 }

@@ -7,6 +7,8 @@ use std::os::unix::fs::PermissionsExt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::utils::errors::AppError;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
@@ -65,34 +67,28 @@ pub fn load_app_config() -> AppConfig {
     serde_json::from_str::<AppConfig>(&content).unwrap_or_default()
 }
 
-pub fn save_app_config(config: &AppConfig) -> Result<(), String> {
-    let path =
-        app_settings_path().ok_or_else(|| "failed to resolve app settings path".to_string())?;
+pub fn save_app_config(config: &AppConfig) -> Result<(), AppError> {
+    let path = app_settings_path()
+        .ok_or_else(|| AppError::Other("failed to resolve app settings path".to_string()))?;
     let parent = path
         .parent()
-        .ok_or_else(|| format!("invalid app settings path: {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("failed to create settings directory: {}", error))?;
+        .ok_or_else(|| AppError::InvalidPath(format!("invalid app settings path: {}", path.display())))?;
+    fs::create_dir_all(parent)?;
 
-    let content = serde_json::to_string_pretty(config)
-        .map_err(|error| format!("failed to serialize settings: {}", error))?;
-    fs::write(&path, format!("{}\n", content))
-        .map_err(|error| format!("failed to write settings {}: {}", path.display(), error))?;
+    let content = serde_json::to_string_pretty(config)?;
+    fs::write(&path, format!("{}\n", content))?;
 
     #[cfg(unix)]
     {
-        let mut permissions = fs::metadata(&path)
-            .map_err(|error| format!("failed to read settings metadata: {}", error))?
-            .permissions();
+        let mut permissions = fs::metadata(&path)?.permissions();
         permissions.set_mode(0o600);
-        fs::set_permissions(&path, permissions)
-            .map_err(|error| format!("failed to secure settings permissions: {}", error))?;
+        fs::set_permissions(&path, permissions)?;
     }
 
     Ok(())
 }
 
-pub fn update_handoff_from_payload(payload: &serde_json::Value) -> Result<AppConfig, String> {
+pub fn update_handoff_from_payload(payload: &serde_json::Value) -> Result<AppConfig, AppError> {
     let mut config = load_app_config();
     let Some(handoff) = payload.get("handoff").and_then(|value| value.as_object()) else {
         return Ok(config);

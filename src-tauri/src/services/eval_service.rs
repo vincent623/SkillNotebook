@@ -9,13 +9,33 @@ use serde_json::json;
 use crate::domain::eval::{EvalDetails, EvalOverallStatus, EvalReport};
 use crate::domain::package::PackageStatus;
 use crate::storage::filesystem;
+use crate::utils::errors::AppError;
 use crate::utils::time::now_iso;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ExpectationCategory {
+    Structure,
+    Content,
+    Quality,
+    Differential,
+}
 
 #[derive(Debug, Clone)]
 pub struct EvaluationArtifacts {
     pub report: EvalReport,
     pub suggested_status: PackageStatus,
     pub validation_summary: String,
+}
+
+pub struct EvalParams<'a> {
+    pub project_root_path: &'a Path,
+    pub package_root: &'a Path,
+    pub package_id: &'a str,
+    pub slug: &'a str,
+    pub package_name: &'a str,
+    pub fallback_description: &'a str,
+    pub iteration: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -53,7 +73,7 @@ struct ValidationOutcome {
 pub fn latest_report(
     package_id: &str,
     root_path: Option<&str>,
-) -> Result<Option<EvalReport>, String> {
+) -> Result<Option<EvalReport>, AppError> {
     let report = filesystem::scan_project_root(root_path)?
         .eval_reports
         .into_iter()
@@ -62,29 +82,32 @@ pub fn latest_report(
     Ok(report)
 }
 
-pub fn run_eval(package_id: &str, root_path: Option<&str>) -> Result<EvalReport, String> {
+pub fn run_eval(package_id: &str, root_path: Option<&str>) -> Result<EvalReport, AppError> {
     let scanned = filesystem::scan_project_root(root_path)?;
     let package = scanned
         .packages
         .iter()
         .find(|item| item.id == package_id)
         .cloned()
-        .ok_or_else(|| format!("package not found: {}", package_id))?;
+        .ok_or_else(|| AppError::NotFound {
+            entity: "package".to_string(),
+            identifier: package_id.to_string(),
+        })?;
 
     let project_root_path = PathBuf::from(&scanned.project_root.root_path);
     let package_root = PathBuf::from(&package.root_path);
     let mut notebook = filesystem::load_package_notebook(&package_root)?;
     let iteration = notebook.eval_reports.len() as u32 + 1;
 
-    let evaluation = evaluate_package(
-        &project_root_path,
-        &package_root,
-        &package.id,
-        &package.slug,
-        &package.name,
-        &notebook.description,
+    let evaluation = evaluate_package(&EvalParams {
+        project_root_path: &project_root_path,
+        package_root: &package_root,
+        package_id: &package.id,
+        slug: &package.slug,
+        package_name: &package.name,
+        fallback_description: &notebook.description,
         iteration,
-    )?;
+    })?;
 
     notebook.last_eval_status = Some(evaluation.report.overall_status.clone());
     notebook.status = if matches!(notebook.status, PackageStatus::Archived) {
@@ -100,24 +123,25 @@ pub fn run_eval(package_id: &str, root_path: Option<&str>) -> Result<EvalReport,
     Ok(evaluation.report)
 }
 
-pub fn evaluate_package(
-    project_root_path: &Path,
-    package_root: &Path,
-    package_id: &str,
-    slug: &str,
-    package_name: &str,
-    fallback_description: &str,
-    iteration: u32,
-) -> Result<EvaluationArtifacts, String> {
+pub fn evaluate_package(params: &EvalParams<'_>) -> Result<EvaluationArtifacts, AppError> {
+    let EvalParams {
+        project_root_path,
+        package_root,
+        package_id,
+        slug,
+        package_name,
+        fallback_description,
+        iteration,
+    } = params;
     let started = Instant::now();
     let now = now_iso();
     let skill_path = package_root.join("SKILL.md");
     let skill_md = read_optional_text(&skill_path)?;
     let skill_content = skill_md.as_deref().unwrap_or_default();
-    let frontmatter = extract_frontmatter(skill_content);
+    let frontmatter = crate::utils::frontmatter::extract(skill_content);
     let frontmatter_description = frontmatter
         .as_deref()
-        .and_then(|block| extract_frontmatter_value(block, "description"));
+        .and_then(|block| crate::utils::frontmatter::get_value(block, "description"));
     let effective_description = frontmatter_description
         .as_deref()
         .filter(|value| !value.trim().is_empty())
@@ -137,7 +161,7 @@ pub fn evaluate_package(
     let has_prompts = !prompt_files.is_empty();
     let has_scripts = !script_files.is_empty();
     let has_tests = !test_files.is_empty() || !eval_definition.evals.is_empty();
-    let input_defined = contains_any(
+    let input_defined = crate::utils::contains_any(
         &lower_skill,
         &[
             "## inputs",
@@ -147,14 +171,14 @@ pub fn evaluate_package(
             "source material",
         ],
     );
-    let output_defined = contains_any(
+    let output_defined = crate::utils::contains_any(
         &lower_skill,
         &["## outputs", "output", "outputs", "deliverable", "result"],
     ) || eval_definition
         .evals
         .iter()
         .any(|item| !item.expected_output.trim().is_empty());
-    let boundaries_clear = contains_any(
+    let boundaries_clear = crate::utils::contains_any(
         &lower_skill,
         &[
             "don't use",
@@ -167,7 +191,7 @@ pub fn evaluate_package(
     let description_has_trigger = effective_description.to_lowercase().contains("use when");
     let has_structured_sections =
         lower_skill.contains("## workflow") || lower_skill.contains("## quick reference");
-    let has_placeholders = contains_any(
+    let has_placeholders = crate::utils::contains_any(
         skill_content,
         &["[trigger condition]", "[task 1]", "[task 2]"],
     );
@@ -222,56 +246,34 @@ pub fn evaluate_package(
         PackageStatus::NeedsEval
     };
 
-    let mut suggestions = Vec::new();
-    if !validation.passed {
-        suggestions.push(validation.summary.clone());
-    }
-    if !description_has_trigger {
-        suggestions.push("Add a frontmatter description that clearly says what the skill does and when to use it.".to_string());
-    }
-    if !boundaries_clear {
-        suggestions.push(
-            "Add a short 'When not to use' or boundary section so the skill does not over-trigger."
-                .to_string(),
-        );
-    }
-    if !has_examples {
-        suggestions
-            .push("Add at least one example to demonstrate the expected output shape.".to_string());
-    }
-    if !has_tests {
-        suggestions.push(
-            "Add eval or smoke-test files so the package can be re-checked consistently."
-                .to_string(),
-        );
-    }
-    if !output_defined {
-        suggestions.push(
-            "Define the final output contract more explicitly in SKILL.md or eval expectations."
-                .to_string(),
-        );
-    }
-    suggestions.truncate(4);
+    let suggestions: Vec<String> = [
+        (!validation.passed).then(|| validation.summary.clone()),
+        (!description_has_trigger).then(|| "Add a frontmatter description that clearly says what the skill does and when to use it.".to_string()),
+        (!boundaries_clear).then(|| "Add a short 'When not to use' or boundary section so the skill does not over-trigger.".to_string()),
+        (!has_examples).then(|| "Add at least one example to demonstrate the expected output shape.".to_string()),
+        (!has_tests).then(|| "Add eval or smoke-test files so the package can be re-checked consistently.".to_string()),
+        (!output_defined).then(|| "Define the final output contract more explicitly in SKILL.md or eval expectations.".to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .take(4)
+    .collect();
 
-    let mut notes = vec![validation.summary.clone()];
-    if !reference_files.is_empty() {
-        notes.push(format!(
+    let notes: Vec<String> = [
+        Some(validation.summary.clone()),
+        (!reference_files.is_empty()).then(|| format!(
             "{} reference file(s) are bundled for progressive disclosure.",
             reference_files.len()
-        ));
-    }
-    if has_scripts {
-        notes.push(format!(
+        )),
+        has_scripts.then(|| format!(
             "{} script file(s) are available for deterministic execution steps.",
             script_files.len()
-        ));
-    }
-    if has_placeholders {
-        notes.push(
-            "Template placeholders are still present and should be replaced before publication."
-                .to_string(),
-        );
-    }
+        )),
+        has_placeholders.then(|| "Template placeholders are still present and should be replaced before publication.".to_string()),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
     let details = EvalDetails {
         has_skill_md,
@@ -298,30 +300,31 @@ pub fn evaluate_package(
 
     let case_results = build_case_results(
         &eval_definition,
-        has_skill_md,
-        has_prompts,
-        has_examples,
-        input_defined,
-        output_defined,
-        boundaries_clear,
-        validation.passed,
-        description_has_trigger,
+        &PackageChecks {
+            has_skill_md,
+            has_prompts,
+            has_examples,
+            input_defined,
+            output_defined,
+            boundaries_clear,
+            validation_passed: validation.passed,
+            description_has_trigger,
+        },
     );
 
-    sync_eval_workspace(
+    sync_eval_workspace(&SyncEvalContext {
         project_root_path,
         package_root,
         package_id,
         slug,
         package_name,
-        &now,
-        iteration,
-        &eval_definition,
-        &case_results,
-        &report,
-        &validation,
-        started.elapsed().as_millis() as u64,
-    )?;
+        created_at: &now,
+        iteration: *iteration,
+        case_results: &case_results,
+        report: &report,
+        validation: &validation,
+        duration_ms: started.elapsed().as_millis() as u64,
+    })?;
 
     Ok(EvaluationArtifacts {
         report,
@@ -330,20 +333,35 @@ pub fn evaluate_package(
     })
 }
 
-fn sync_eval_workspace(
-    project_root_path: &Path,
-    package_root: &Path,
-    package_id: &str,
-    slug: &str,
-    package_name: &str,
-    created_at: &str,
+struct SyncEvalContext<'a> {
+    project_root_path: &'a Path,
+    package_root: &'a Path,
+    package_id: &'a str,
+    slug: &'a str,
+    package_name: &'a str,
+    created_at: &'a str,
     iteration: u32,
-    _eval_definition: &SkillEvalFile,
-    case_results: &[(SkillEvalCase, Vec<EvalExpectationResult>)],
-    report: &EvalReport,
-    validation: &ValidationOutcome,
+    case_results: &'a [(SkillEvalCase, Vec<EvalExpectationResult>)],
+    report: &'a EvalReport,
+    validation: &'a ValidationOutcome,
     duration_ms: u64,
-) -> Result<(), String> {
+}
+
+fn sync_eval_workspace(ctx: &SyncEvalContext<'_>) -> Result<(), AppError> {
+    let SyncEvalContext {
+        project_root_path,
+        package_root,
+        package_id,
+        slug,
+        package_name,
+        created_at,
+        iteration,
+        case_results,
+        report,
+        validation,
+        duration_ms,
+    } = ctx;
+    let case_results: &[(SkillEvalCase, Vec<EvalExpectationResult>)] = case_results;
     let eval_root = project_root_path.join(".42eval").join(slug);
     let cases_root = eval_root.join("cases");
     let iteration_root = eval_root.join("iterations").join(format!("v{}", iteration));
@@ -355,8 +373,7 @@ fn sync_eval_workspace(
 
     if package_root.join("SKILL.md").exists() {
         let skill_snapshot = snapshot_root.join("SKILL.md");
-        let content = fs::read_to_string(package_root.join("SKILL.md"))
-            .map_err(|error| format!("failed to read {}: {}", package_root.display(), error))?;
+        let content = fs::read_to_string(package_root.join("SKILL.md"))?;
         filesystem::write_text_file(&skill_snapshot, &content)?;
     }
     if package_root.join("references").exists() {
@@ -555,20 +572,17 @@ fn sync_eval_workspace(
     Ok(())
 }
 
-fn load_eval_file(package_root: &Path) -> Result<SkillEvalFile, String> {
+fn load_eval_file(package_root: &Path) -> Result<SkillEvalFile, AppError> {
     let path = package_root.join("evals").join("evals.json");
     if !path.exists() {
         return Ok(SkillEvalFile::default());
     }
 
-    let content = fs::read_to_string(&path)
-        .map_err(|error| format!("failed to read {}: {}", path.display(), error))?;
-    serde_json::from_str(&content)
-        .map_err(|error| format!("failed to parse {}: {}", path.display(), error))
+    let content = fs::read_to_string(&path)?;
+    Ok(serde_json::from_str(&content)?)
 }
 
-fn build_case_results(
-    eval_definition: &SkillEvalFile,
+struct PackageChecks {
     has_skill_md: bool,
     has_prompts: bool,
     has_examples: bool,
@@ -577,6 +591,11 @@ fn build_case_results(
     boundaries_clear: bool,
     validation_passed: bool,
     description_has_trigger: bool,
+}
+
+fn build_case_results(
+    eval_definition: &SkillEvalFile,
+    checks: &PackageChecks,
 ) -> Vec<(SkillEvalCase, Vec<EvalExpectationResult>)> {
     let cases = if eval_definition.evals.is_empty() {
         vec![SkillEvalCase {
@@ -616,8 +635,8 @@ fn build_case_results(
                         || lowered.contains("validate")
                     {
                         (
-                            validation_passed,
-                            if validation_passed {
+                            checks.validation_passed,
+                            if checks.validation_passed {
                                 "quick_validate.py accepted the skill frontmatter.".to_string()
                             } else {
                                 "quick_validate.py reported a frontmatter issue.".to_string()
@@ -628,8 +647,8 @@ fn build_case_results(
                         || lowered.contains("description")
                     {
                         (
-                            description_has_trigger,
-                            if description_has_trigger {
+                            checks.description_has_trigger,
+                            if checks.description_has_trigger {
                                 "The description contains an explicit 'Use when' trigger."
                                     .to_string()
                             } else {
@@ -639,8 +658,8 @@ fn build_case_results(
                         )
                     } else if lowered.contains("output") {
                         (
-                            output_defined,
-                            if output_defined {
+                            checks.output_defined,
+                            if checks.output_defined {
                                 "Output expectations are stated in SKILL.md or eval definitions."
                                     .to_string()
                             } else {
@@ -649,8 +668,8 @@ fn build_case_results(
                         )
                     } else if lowered.contains("input") {
                         (
-                            input_defined,
-                            if input_defined {
+                            checks.input_defined,
+                            if checks.input_defined {
                                 "Input expectations are spelled out in the skill.".to_string()
                             } else {
                                 "Input requirements are still implicit.".to_string()
@@ -658,8 +677,8 @@ fn build_case_results(
                         )
                     } else if lowered.contains("example") {
                         (
-                            has_examples,
-                            if has_examples {
+                            checks.has_examples,
+                            if checks.has_examples {
                                 "Example files are present under examples/.".to_string()
                             } else {
                                 "No example files were found.".to_string()
@@ -667,8 +686,8 @@ fn build_case_results(
                         )
                     } else if lowered.contains("prompt") {
                         (
-                            has_prompts,
-                            if has_prompts {
+                            checks.has_prompts,
+                            if checks.has_prompts {
                                 "Prompt files are present under prompts/.".to_string()
                             } else {
                                 "No prompt files were found.".to_string()
@@ -676,8 +695,8 @@ fn build_case_results(
                         )
                     } else if lowered.contains("boundary") || lowered.contains("not to use") {
                         (
-                            boundaries_clear,
-                            if boundaries_clear {
+                            checks.boundaries_clear,
+                            if checks.boundaries_clear {
                                 "Boundary language is present in the skill instructions."
                                     .to_string()
                             } else {
@@ -686,7 +705,7 @@ fn build_case_results(
                         )
                     } else {
                         (
-                            has_skill_md && has_prompts && output_defined,
+                            checks.has_skill_md && checks.has_prompts && checks.output_defined,
                             "General structural expectations are satisfied by the current draft."
                                 .to_string(),
                         )
@@ -769,7 +788,7 @@ fn run_quick_validate(package_root: &Path) -> ValidationOutcome {
     }
 }
 
-fn list_relative_files(package_root: &Path, subdir: &str) -> Result<Vec<String>, String> {
+fn list_relative_files(package_root: &Path, subdir: &str) -> Result<Vec<String>, AppError> {
     let dir = package_root.join(subdir);
     if !dir.exists() {
         return Ok(Vec::new());
@@ -785,13 +804,9 @@ fn collect_relative_files(
     package_root: &Path,
     current: &Path,
     files: &mut Vec<String>,
-) -> Result<(), String> {
-    for entry in fs::read_dir(current)
-        .map_err(|error| format!("failed to read directory {}: {}", current.display(), error))?
-    {
-        let path = entry
-            .map_err(|error| format!("failed to inspect directory entry: {}", error))?
-            .path();
+) -> Result<(), AppError> {
+    for entry in fs::read_dir(current)? {
+        let path = entry?.path();
 
         if path.is_dir() {
             collect_relative_files(package_root, &path, files)?;
@@ -799,8 +814,7 @@ fn collect_relative_files(
         }
 
         let relative = path
-            .strip_prefix(package_root)
-            .map_err(|error| format!("failed to compute relative path: {}", error))?
+            .strip_prefix(package_root)?
             .to_string_lossy()
             .to_string();
         files.push(relative);
@@ -809,65 +823,12 @@ fn collect_relative_files(
     Ok(())
 }
 
-fn read_optional_text(path: &Path) -> Result<Option<String>, String> {
+fn read_optional_text(path: &Path) -> Result<Option<String>, AppError> {
     if !path.exists() {
         return Ok(None);
     }
 
-    fs::read_to_string(path)
-        .map(Some)
-        .map_err(|error| format!("failed to read {}: {}", path.display(), error))
-}
-
-fn extract_frontmatter(content: &str) -> Option<String> {
-    let mut lines = content.lines();
-    if lines.next()? != "---" {
-        return None;
-    }
-
-    let mut frontmatter = Vec::new();
-    for line in lines {
-        if line == "---" {
-            return Some(frontmatter.join("\n"));
-        }
-        frontmatter.push(line.to_string());
-    }
-
-    None
-}
-
-fn extract_frontmatter_value(frontmatter: &str, key: &str) -> Option<String> {
-    let lines = frontmatter.lines().collect::<Vec<_>>();
-    let prefix = format!("{}:", key);
-    let mut index = 0;
-
-    while index < lines.len() {
-        let line = lines[index];
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix(&prefix) {
-            let value = rest.trim();
-            if value == "|" || value == ">" {
-                index += 1;
-                let mut block = Vec::new();
-                while index < lines.len() {
-                    let current = lines[index];
-                    if current.starts_with(' ') || current.starts_with('\t') {
-                        block.push(current.trim().to_string());
-                        index += 1;
-                    } else {
-                        break;
-                    }
-                }
-                return Some(block.join(" "));
-            }
-
-            return Some(value.trim_matches('"').trim_matches('\'').to_string());
-        }
-
-        index += 1;
-    }
-
-    None
+    fs::read_to_string(path).map(Some).map_err(AppError::from)
 }
 
 fn score_ratio(items: &[(bool, u32)]) -> f32 {
@@ -885,20 +846,16 @@ fn score_ratio(items: &[(bool, u32)]) -> f32 {
     (earned / total_weight * 100.0).round() / 100.0
 }
 
-fn contains_any(content: &str, patterns: &[&str]) -> bool {
-    patterns.iter().any(|pattern| content.contains(pattern))
-}
-
-fn expectation_category(description: &str) -> &'static str {
+fn expectation_category(description: &str) -> ExpectationCategory {
     let lowered = description.to_lowercase();
     if lowered.contains("output") || lowered.contains("input") {
-        "structure"
+        ExpectationCategory::Structure
     } else if lowered.contains("example") || lowered.contains("prompt") {
-        "content"
+        ExpectationCategory::Content
     } else if lowered.contains("trigger") || lowered.contains("frontmatter") {
-        "quality"
+        ExpectationCategory::Quality
     } else {
-        "differential"
+        ExpectationCategory::Differential
     }
 }
 
@@ -908,6 +865,7 @@ mod tests {
     use std::{env, fs};
 
     use crate::domain::package::PackageNotebookDocument;
+    use crate::services::eval_service::EvalParams;
     use crate::storage::filesystem;
     use crate::utils::time::now_iso;
 
@@ -994,15 +952,15 @@ mod tests {
         };
         filesystem::save_package_notebook(&package_root, &notebook).expect("notebook");
 
-        let evaluation = evaluate_package(
-            &project_root_path,
-            &package_root,
-            "pkg-draft-skill",
-            "draft-skill",
-            "Draft Skill",
-            &notebook.description,
-            1,
-        )
+        let evaluation = evaluate_package(&EvalParams {
+            project_root_path: &project_root_path,
+            package_root: &package_root,
+            package_id: "pkg-draft-skill",
+            slug: "draft-skill",
+            package_name: "Draft Skill",
+            fallback_description: &notebook.description,
+            iteration: 1,
+        })
         .expect("evaluation");
 
         assert!(matches!(

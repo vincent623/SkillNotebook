@@ -1,7 +1,7 @@
 use std::cmp::max;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::domain::eval::{EvalOverallStatus, EvalReport};
 use crate::domain::package::{PackageStatus, SkillPackage};
@@ -11,6 +11,7 @@ use crate::domain::version::{
 use crate::storage::filesystem;
 use crate::storage::snapshots;
 use crate::utils::diff::diff_text;
+use crate::utils::errors::AppError;
 use crate::utils::time::now_iso;
 
 const FORMAL_VERSION_CAP: usize = 10;
@@ -18,7 +19,7 @@ const FORMAL_VERSION_CAP: usize = 10;
 pub fn list_versions(
     package_id: &str,
     root_path: Option<&str>,
-) -> Result<Vec<PackageVersion>, String> {
+) -> Result<Vec<PackageVersion>, AppError> {
     let mut versions = filesystem::scan_project_root(root_path)?
         .versions
         .into_iter()
@@ -39,14 +40,14 @@ pub fn save_version(
     package_id: &str,
     note: Option<String>,
     root_path: Option<&str>,
-) -> Result<PackageVersion, String> {
+) -> Result<PackageVersion, AppError> {
     let scanned = filesystem::scan_project_root(root_path)?;
     let package = scanned
         .packages
         .iter()
         .find(|item| item.id == package_id)
         .cloned()
-        .ok_or_else(|| format!("package not found: {}", package_id))?;
+        .ok_or_else(|| AppError::Other(format!("package not found: {}", package_id)))?;
 
     let project_root_path = PathBuf::from(&scanned.project_root.root_path);
     let package_root = PathBuf::from(&package.root_path);
@@ -57,10 +58,10 @@ pub fn save_version(
         .map(|report| report.id.clone())
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| {
-            format!(
+            AppError::Other(format!(
                 "package {} has no eval report yet; run eval before saving a formal version",
                 package_id
-            )
+            ))
         })?;
 
     let max_existing = notebook
@@ -126,16 +127,16 @@ pub fn save_version(
 pub fn diff_version(
     version_id: &str,
     root_path: Option<&str>,
-) -> Result<PackageVersionDiff, String> {
+) -> Result<PackageVersionDiff, AppError> {
     let context = load_version_context(version_id, root_path)?;
     if !snapshots::snapshot_has_restorable_content(
         &context.project_root_path,
         &context.version.snapshot_path,
     )? {
-        return Err(format!(
+        return Err(AppError::Other(format!(
             "version {} was saved before restorable snapshots were captured; save a new version to compare",
             version_id
-        ));
+        )));
     }
 
     let snapshot_root = context
@@ -149,14 +150,14 @@ pub fn diff_version(
             let content = read_optional_text_file(&context.package_root.join(&path))?;
             Ok((path, content))
         })
-        .collect::<Result<HashMap<_, _>, String>>()?;
+        .collect::<Result<HashMap<_, _>, AppError>>()?;
     let version_map = version_files
         .into_iter()
         .map(|path| {
             let content = read_optional_text_file(&snapshot_root.join(&path))?;
             Ok((path, content))
         })
-        .collect::<Result<HashMap<_, _>, String>>()?;
+        .collect::<Result<HashMap<_, _>, AppError>>()?;
 
     let mut all_paths = BTreeSet::new();
     all_paths.extend(current_map.keys().cloned());
@@ -169,9 +170,9 @@ pub fn diff_version(
 
         let change_type = match (version_content.as_ref(), current_content.as_ref()) {
             (Some(previous), Some(current)) if previous == current => None,
-            (Some(_), Some(_)) => Some(VersionDiffChangeType::Modified),
-            (Some(_), None) => Some(VersionDiffChangeType::Removed),
-            (None, Some(_)) => Some(VersionDiffChangeType::Added),
+            (Some(_previous), Some(_current)) => Some(VersionDiffChangeType::Modified),
+            (Some(_previous), None) => Some(VersionDiffChangeType::Removed),
+            (None, Some(_current)) => Some(VersionDiffChangeType::Added),
             (None, None) => None,
         };
 
@@ -200,7 +201,7 @@ pub fn diff_version(
     })
 }
 
-pub fn restore_version(version_id: &str, root_path: Option<&str>) -> Result<SkillPackage, String> {
+pub fn restore_version(version_id: &str, root_path: Option<&str>) -> Result<SkillPackage, AppError> {
     let context = load_version_context(version_id, root_path)?;
     snapshots::restore_snapshot(
         &context.project_root_path,
@@ -238,7 +239,7 @@ pub fn restore_version(version_id: &str, root_path: Option<&str>) -> Result<Skil
         .packages
         .into_iter()
         .find(|item| item.id == context.package.id)
-        .ok_or_else(|| format!("package not found after restore: {}", context.package.id))
+        .ok_or_else(|| AppError::Other(format!("package not found after restore: {}", context.package.id)))
 }
 
 #[derive(Debug, Clone)]
@@ -252,20 +253,26 @@ struct VersionContext {
 fn load_version_context(
     version_id: &str,
     root_path: Option<&str>,
-) -> Result<VersionContext, String> {
+) -> Result<VersionContext, AppError> {
     let scanned = filesystem::scan_project_root(root_path)?;
     let version = scanned
         .versions
         .iter()
         .find(|item| item.id == version_id)
         .cloned()
-        .ok_or_else(|| format!("version not found: {}", version_id))?;
+        .ok_or_else(|| AppError::NotFound {
+            entity: "version".to_string(),
+            identifier: version_id.to_string(),
+        })?;
     let package = scanned
         .packages
         .iter()
         .find(|item| item.id == version.package_id)
         .cloned()
-        .ok_or_else(|| format!("package not found for version: {}", version.package_id))?;
+        .ok_or_else(|| AppError::NotFound {
+            entity: "package".to_string(),
+            identifier: version.package_id.clone(),
+        })?;
 
     Ok(VersionContext {
         project_root_path: PathBuf::from(&scanned.project_root.root_path),
@@ -275,14 +282,14 @@ fn load_version_context(
     })
 }
 
-fn read_optional_text_file(path: &PathBuf) -> Result<Option<String>, String> {
+fn read_optional_text_file(path: &Path) -> Result<Option<String>, AppError> {
     match fs::read_to_string(path) {
         Ok(content) => Ok(Some(content)),
         Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
             Ok(Some("<<binary or non-utf8 content omitted>>".to_string()))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("failed to read {}: {}", path.display(), error)),
+        Err(error) => Err(AppError::Io(error)),
     }
 }
 
@@ -295,10 +302,10 @@ fn status_from_eval_report(report: &EvalReport) -> PackageStatus {
 }
 
 fn evict_versions(
-    project_root_path: &PathBuf,
+    project_root_path: &Path,
     versions: &mut Vec<PackageVersion>,
     cap: usize,
-) -> Result<Vec<PackageVersion>, String> {
+) -> Result<Vec<PackageVersion>, AppError> {
     if versions.len() <= cap {
         return Ok(Vec::new());
     }
@@ -314,29 +321,29 @@ fn evict_versions(
             evicted.push(versions.remove(index));
             to_remove -= 1;
         } else {
-            return Err(format!(
+            return Err(AppError::Other(format!(
                 "cannot evict versions; all remaining versions are pinned (cap {})",
                 cap
-            ));
+            )));
         }
     }
 
     // If something went very wrong and snapshot paths are unsafe, fail fast.
     for item in &evicted {
         if !item.snapshot_path.starts_with(".skill-notebook/snapshots") {
-            return Err(format!(
+            return Err(AppError::Other(format!(
                 "unsafe snapshot path encountered while evicting: {}",
                 item.snapshot_path
-            ));
+            )));
         }
 
         let absolute = project_root_path.join(&item.snapshot_path);
         if absolute.exists() && !absolute.starts_with(snapshots::snapshots_root(project_root_path))
         {
-            return Err(format!(
+            return Err(AppError::Other(format!(
                 "refusing to delete snapshot outside snapshots root: {}",
                 absolute.display()
-            ));
+            )));
         }
     }
 
@@ -345,34 +352,10 @@ fn evict_versions(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use crate::domain::package::{PackageNotebookDocument, PackageStatus};
     use crate::services::version_service;
     use crate::storage::filesystem;
-
-    fn tmp_project_root_path() -> PathBuf {
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "skill-notebook-project_root-test-{}-{}",
-            std::process::id(),
-            seed
-        ))
-    }
-
-    fn copy_example_project_root(destination: &PathBuf) -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("examples")
-            .join("project-root");
-        filesystem::copy_directory_recursive(&root, destination).expect("copy project_root");
-        destination.clone()
-    }
+    use crate::test_helpers::{copy_example_project_root, tmp_project_root_path};
 
     #[test]
     fn saves_a_new_formal_version_with_snapshot() {
@@ -431,7 +414,7 @@ mod tests {
             Some(root.to_string_lossy().as_ref()),
         )
         .expect_err("should fail");
-        assert!(error.contains("no eval report"));
+        assert!(error.to_string().contains("no eval report"));
     }
 
     #[test]

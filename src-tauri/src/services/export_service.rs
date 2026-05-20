@@ -4,20 +4,24 @@ use std::process::{Command, Stdio};
 
 use crate::domain::package::PackageExportArtifact;
 use crate::storage::filesystem;
+use crate::utils::errors::AppError;
 use crate::utils::ids::slugify;
 use crate::utils::time::now_iso;
 
 pub fn export_package_zip(
     package_id: &str,
     root_path: Option<&str>,
-) -> Result<PackageExportArtifact, String> {
+) -> Result<PackageExportArtifact, AppError> {
     let scanned = filesystem::scan_project_root(root_path)?;
     let project_root = PathBuf::from(&scanned.project_root.root_path);
     let package = scanned
         .packages
         .into_iter()
         .find(|item| item.id == package_id)
-        .ok_or_else(|| format!("package not found: {}", package_id))?;
+        .ok_or_else(|| AppError::NotFound {
+            entity: "package".to_string(),
+            identifier: package_id.to_string(),
+        })?;
     let package_root = PathBuf::from(&package.root_path);
     let created_at = now_iso();
     let timestamp = slugify(&created_at).trim_matches('-').to_string();
@@ -34,22 +38,10 @@ pub fn export_package_zip(
 
     filesystem::ensure_directory(&exports_root)?;
     if zip_path.exists() {
-        fs::remove_file(&zip_path).map_err(|error| {
-            format!(
-                "failed to replace existing export {}: {}",
-                zip_path.display(),
-                error
-            )
-        })?;
+        fs::remove_file(&zip_path)?;
     }
     if staging_parent.exists() {
-        fs::remove_dir_all(&staging_parent).map_err(|error| {
-            format!(
-                "failed to reset export staging {}: {}",
-                staging_parent.display(),
-                error
-            )
-        })?;
+        fs::remove_dir_all(&staging_parent)?;
     }
 
     copy_visible_package_files(&package_root, &staging_package_root)?;
@@ -57,9 +49,7 @@ pub fn export_package_zip(
     fs::remove_dir_all(&staging_parent).ok();
     export_result?;
 
-    let size_bytes = fs::metadata(&zip_path)
-        .map_err(|error| format!("failed to inspect export {}: {}", zip_path.display(), error))?
-        .len();
+    let size_bytes = fs::metadata(&zip_path)?.len();
 
     Ok(PackageExportArtifact {
         package_id: package.id,
@@ -69,20 +59,17 @@ pub fn export_package_zip(
     })
 }
 
-fn copy_visible_package_files(source: &Path, destination: &Path) -> Result<(), String> {
+fn copy_visible_package_files(source: &Path, destination: &Path) -> Result<(), AppError> {
     filesystem::ensure_directory(destination)?;
-    for entry in fs::read_dir(source)
-        .map_err(|error| format!("failed to read package {}: {}", source.display(), error))?
-    {
-        let entry = entry.map_err(|error| format!("failed to inspect package entry: {}", error))?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
         if should_skip_export_entry(&name) {
             continue;
         }
 
         let source_path = entry.path();
-        let metadata = fs::symlink_metadata(&source_path)
-            .map_err(|error| format!("failed to inspect {}: {}", source_path.display(), error))?;
+        let metadata = fs::symlink_metadata(&source_path)?;
         if metadata.file_type().is_symlink() {
             continue;
         }
@@ -94,14 +81,7 @@ fn copy_visible_package_files(source: &Path, destination: &Path) -> Result<(), S
             if let Some(parent) = destination_path.parent() {
                 filesystem::ensure_directory(parent)?;
             }
-            fs::copy(&source_path, &destination_path).map_err(|error| {
-                format!(
-                    "failed to copy {} to {}: {}",
-                    source_path.display(),
-                    destination_path.display(),
-                    error
-                )
-            })?;
+            fs::copy(&source_path, &destination_path)?;
         }
     }
 
@@ -116,7 +96,7 @@ fn zip_staged_package(
     staging_parent: &Path,
     package_dir_name: &str,
     zip_path: &Path,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let ditto_status = Command::new("ditto")
         .arg("-c")
         .arg("-k")
@@ -143,47 +123,25 @@ fn zip_staged_package(
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
-        .map_err(|error| format!("failed to launch zip export command: {}", error))?;
+        .map_err(|error| AppError::Other(format!("failed to launch zip export command: {}", error)))?;
 
     if output.status.success() {
         Ok(())
     } else {
-        Err(format!(
+        Err(AppError::Other(format!(
             "zip export failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
-        ))
+        )))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::export_package_zip;
-    use crate::storage::filesystem;
 
     use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn tmp_project_root_path() -> PathBuf {
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "skill-notebook-export-test-{}-{}",
-            std::process::id(),
-            seed
-        ))
-    }
-
-    fn copy_example_project_root(destination: &PathBuf) -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("examples")
-            .join("project-root");
-        filesystem::copy_directory_recursive(&root, destination).expect("copy project_root");
-        destination.clone()
-    }
+    use crate::test_helpers::{copy_example_project_root, tmp_project_root_path};
 
     #[test]
     fn exports_a_sanitized_package_zip() {

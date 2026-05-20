@@ -1,7 +1,7 @@
 use crate::domain::common::AppResponse;
 use crate::domain::package::{
     PackageExportArtifact, PackageFileContent, PackageFileEntry, PackageImportRequest,
-    PackageImportResponse, PackageReferenceResponse, PackageUpdateRequest, SearchResult,
+    PackageImportResponse, PackageReferenceResponse, PackageUpdateRequest,
     SkillPackage,
 };
 use crate::services::{export_service, package_service};
@@ -37,24 +37,6 @@ pub async fn package_get(
         Ok(Some(item)) => Ok(AppResponse::success(item)),
         Ok(None) => Ok(not_found("package", &package_id)),
         Err(error) => Ok(AppResponse::failure("package_get_failed", error)),
-    }
-}
-
-#[allow(dead_code)]
-fn _search_results(root_path: Option<&str>) -> Vec<SearchResult> {
-    match package_service::list_packages(root_path) {
-        Ok(packages) => packages
-            .into_iter()
-            .map(|item| SearchResult {
-                package_id: item.id,
-                name: item.name,
-                description: item.description,
-                tags: item.tags,
-                updated_at: item.updated_at,
-                status: item.status,
-            })
-            .collect(),
-        Err(_) => Vec::new(),
     }
 }
 

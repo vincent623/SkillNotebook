@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::storage::filesystem;
+use crate::utils::errors::AppError;
 
 #[derive(Debug, Clone)]
 struct ProjectRootSession {
@@ -27,26 +28,26 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn current_project_root(&self) -> Result<String, String> {
+    pub fn current_project_root(&self) -> Result<String, AppError> {
         self.project_root_session
             .lock()
-            .map_err(|_| "failed to lock project_root session".to_string())
+            .map_err(|_| AppError::LockPoisoned)
             .map(|session| session.current_project_root.clone())
     }
 
-    pub fn recent_project_roots(&self) -> Result<Vec<String>, String> {
+    pub fn recent_project_roots(&self) -> Result<Vec<String>, AppError> {
         self.project_root_session
             .lock()
-            .map_err(|_| "failed to lock project_root session".to_string())
+            .map_err(|_| AppError::LockPoisoned)
             .map(|session| session.recent_project_roots.clone())
     }
 
-    pub fn set_current_project_root(&self, root_path: &str) -> Result<String, String> {
+    pub fn set_current_project_root(&self, root_path: &str) -> Result<String, AppError> {
         let normalized = normalize_project_root(root_path);
         let mut session = self
             .project_root_session
             .lock()
-            .map_err(|_| "failed to lock project_root session".to_string())?;
+            .map_err(|_| AppError::LockPoisoned)?;
 
         session.current_project_root = normalized.clone();
         session

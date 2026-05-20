@@ -2,7 +2,6 @@ use crate::config::app_config;
 use crate::domain::common::AppResponse;
 use crate::services::project_root_service;
 use crate::state::app_state::AppState;
-use crate::storage::filesystem;
 use serde_json::json;
 
 #[tauri::command]
@@ -42,7 +41,7 @@ fn build_settings_payload(state: &AppState) -> Result<serde_json::Value, String>
         "formalVersionCap": 10,
         "projectRootModel": "local_directory",
         "skillRootName": ".skills",
-        "defaultProjectRoot": filesystem::default_project_root().to_string_lossy().to_string(),
+        "defaultProjectRoot": project_root_service::default_project_root_path(),
         "currentProjectRoot": current_project_root,
         "recentProjectRoots": recent_project_roots,
         "settingsPath": app_config::app_settings_path().map(|path| path.to_string_lossy().to_string()),

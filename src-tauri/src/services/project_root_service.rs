@@ -1,25 +1,27 @@
 use crate::domain::project_root::ProjectRoot;
 use crate::storage::filesystem;
+use crate::utils::errors::AppError;
 use crate::utils::ids::slugify;
 use crate::utils::time::now_iso;
 use serde_json::json;
 
-pub fn default_project_root() -> Result<ProjectRoot, String> {
+pub fn default_project_root() -> Result<ProjectRoot, AppError> {
     Ok(filesystem::scan_project_root(None)?.project_root)
 }
 
-pub fn open_project_root(root_path: &str) -> Result<ProjectRoot, String> {
+pub fn default_project_root_path() -> String {
+    filesystem::default_project_root().to_string_lossy().to_string()
+}
+
+pub fn open_project_root(root_path: &str) -> Result<ProjectRoot, AppError> {
     Ok(filesystem::scan_project_root(Some(root_path))?.project_root)
 }
 
-pub fn recent_project_roots(root_paths: Vec<String>) -> Result<Vec<ProjectRoot>, String> {
-    let mut project_roots = Vec::new();
-
-    for root_path in root_paths {
-        if let Ok(project_root) = open_project_root(&root_path) {
-            project_roots.push(project_root);
-        }
-    }
+pub fn recent_project_roots(root_paths: Vec<String>) -> Result<Vec<ProjectRoot>, AppError> {
+    let mut project_roots: Vec<_> = root_paths
+        .iter()
+        .filter_map(|root_path| open_project_root(root_path).ok())
+        .collect();
 
     if project_roots.is_empty() {
         project_roots.push(default_project_root()?);
@@ -45,7 +47,7 @@ pub fn draft_project_root(name: &str) -> ProjectRoot {
     }
 }
 
-pub fn create_project_root(name: &str) -> Result<ProjectRoot, String> {
+pub fn create_project_root(name: &str) -> Result<ProjectRoot, AppError> {
     let mut draft = draft_project_root(name);
     if draft.root_path.trim().is_empty() {
         draft.root_path = filesystem::default_project_root()
@@ -60,10 +62,10 @@ pub fn create_project_root(name: &str) -> Result<ProjectRoot, String> {
             .join("config.json")
             .exists()
     {
-        return Err(format!(
+        return Err(AppError::Other(format!(
             "project root already exists: {}",
             root_path.display()
-        ));
+        )));
     }
 
     filesystem::ensure_directory(&filesystem::canonical_skills_root(&root_path))?;

@@ -13,6 +13,7 @@ use crate::domain::test::{
     PackageTestCheckResult, PackageTestFileResult, PackageTestReport, PackageTestStatus,
 };
 use crate::storage::filesystem;
+use crate::utils::errors::AppError;
 use crate::utils::ids::slugify;
 use crate::utils::time::now_iso;
 
@@ -55,13 +56,16 @@ struct PackageTestContext {
 pub fn run_package_test(
     package_id: &str,
     root_path: Option<&str>,
-) -> Result<PackageTestReport, String> {
+) -> Result<PackageTestReport, AppError> {
     let scanned = filesystem::scan_project_root(root_path)?;
     let package = scanned
         .packages
         .into_iter()
         .find(|item| item.id == package_id)
-        .ok_or_else(|| format!("package not found: {}", package_id))?;
+        .ok_or_else(|| AppError::NotFound {
+            entity: "package".to_string(),
+            identifier: package_id.to_string(),
+        })?;
     let package_root = PathBuf::from(&package.root_path);
     let test_files = collect_test_json_files(&package_root)?;
     let created_at = now_iso();
@@ -86,10 +90,11 @@ pub fn run_package_test(
     }
 
     let context = build_context(&package_root, &package.id, &package.slug, &package.name)?;
-    let mut file_results = Vec::new();
-    for path in test_files {
-        file_results.push(run_test_file(&package_root, &path, &context)?);
-    }
+    let file_results: Result<Vec<_>, AppError> = test_files
+        .iter()
+        .map(|path| run_test_file(&package_root, path, &context))
+        .collect();
+    let file_results = file_results?;
 
     let total_tests = file_results.len() as u32;
     let passed_tests = file_results.iter().filter(|item| item.passed).count() as u32;
@@ -125,10 +130,9 @@ fn run_test_file(
     package_root: &Path,
     path: &Path,
     context: &PackageTestContext,
-) -> Result<PackageTestFileResult, String> {
+) -> Result<PackageTestFileResult, AppError> {
     let relative = relative_path(package_root, path)?;
-    let content = fs::read_to_string(path)
-        .map_err(|error| format!("failed to read {}: {}", path.display(), error))?;
+    let content = fs::read_to_string(path)?;
     let definition = match serde_json::from_str::<SmokeTestDefinition>(&content) {
         Ok(definition) => definition,
         Err(error) => {
@@ -408,16 +412,19 @@ fn summarize_script_output(stdout: &str, stderr: &str) -> String {
 }
 
 fn truncate_evidence(value: &str) -> String {
-    let mut truncated = value.chars().take(240).collect::<String>();
-    if value.chars().count() > 240 {
-        truncated.push_str("...");
+    match value.char_indices().nth(240) {
+        None => value.to_string(),
+        Some((byte_idx, _)) => {
+            let mut truncated = value[..byte_idx].to_string();
+            truncated.push_str("...");
+            truncated
+        }
     }
-    truncated
 }
 
 fn evaluate_expectation(expectation: &str, context: &PackageTestContext) -> PackageTestCheckResult {
     let lowered = expectation.to_lowercase();
-    let (passed, evidence) = if contains_any(&lowered, &["frontmatter", "validate", "validates"]) {
+    let (passed, evidence) = if crate::utils::contains_any(&lowered, &["frontmatter", "validate", "validates"]) {
         (
             context.has_skill_md && context.has_frontmatter,
             if context.has_frontmatter {
@@ -439,7 +446,7 @@ fn evaluate_expectation(expectation: &str, context: &PackageTestContext) -> Pack
                 context.has_prompts, context.has_examples, context.has_evals, context.has_tests
             ),
         )
-    } else if contains_any(&lowered, &["when to use", "use when", "trigger"]) {
+    } else if crate::utils::contains_any(&lowered, &["when to use", "use when", "trigger"]) {
         (
             context.use_trigger_defined,
             if context.use_trigger_defined {
@@ -448,7 +455,7 @@ fn evaluate_expectation(expectation: &str, context: &PackageTestContext) -> Pack
                 "Add a `Use when` description or `When to Use` section.".to_string()
             },
         )
-    } else if contains_any(&lowered, &["output", "outputs", "deliverable", "result"]) {
+    } else if crate::utils::contains_any(&lowered, &["output", "outputs", "deliverable", "result"]) {
         (
             context.output_defined,
             if context.output_defined {
@@ -457,7 +464,7 @@ fn evaluate_expectation(expectation: &str, context: &PackageTestContext) -> Pack
                 "Add an Outputs section or expected output contract.".to_string()
             },
         )
-    } else if contains_any(&lowered, &["input", "inputs", "source"]) {
+    } else if crate::utils::contains_any(&lowered, &["input", "inputs", "source"]) {
         (
             context.input_defined,
             if context.input_defined {
@@ -502,9 +509,13 @@ fn build_context(
     package_id: &str,
     slug: &str,
     name: &str,
-) -> Result<PackageTestContext, String> {
+) -> Result<PackageTestContext, AppError> {
     let skill_path = package_root.join("SKILL.md");
-    let skill_content = fs::read_to_string(&skill_path).unwrap_or_default();
+    let skill_content = if skill_path.exists() {
+        fs::read_to_string(&skill_path)?
+    } else {
+        String::new()
+    };
     let skill_lower = skill_content.to_lowercase();
     let corpus_lower = read_package_corpus(package_root)?.to_lowercase();
     let has_skill_md = skill_path.exists();
@@ -513,11 +524,11 @@ fn build_context(
     let has_examples = contains_regular_file(&package_root.join("examples"))?;
     let has_evals = contains_regular_file(&package_root.join("evals"))?;
     let has_tests = contains_regular_file(&package_root.join("tests"))?;
-    let input_defined = contains_any(
+    let input_defined = crate::utils::contains_any(
         &skill_lower,
         &["## inputs", "input", "inputs", "source material"],
     );
-    let output_defined = contains_any(
+    let output_defined = crate::utils::contains_any(
         &skill_lower,
         &[
             "## outputs",
@@ -528,7 +539,7 @@ fn build_context(
             "summary",
         ],
     );
-    let use_trigger_defined = contains_any(&skill_lower, &["when to use", "use when"])
+    let use_trigger_defined = crate::utils::contains_any(&skill_lower, &["when to use", "use when"])
         || corpus_lower.contains("use when");
 
     Ok(PackageTestContext {
@@ -548,7 +559,7 @@ fn build_context(
     })
 }
 
-fn collect_test_json_files(package_root: &Path) -> Result<Vec<PathBuf>, String> {
+fn collect_test_json_files(package_root: &Path) -> Result<Vec<PathBuf>, AppError> {
     let tests_root = package_root.join("tests");
     if !tests_root.exists() {
         return Ok(Vec::new());
@@ -560,19 +571,15 @@ fn collect_test_json_files(package_root: &Path) -> Result<Vec<PathBuf>, String> 
     Ok(files)
 }
 
-fn collect_json_files(current: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
-    for entry in fs::read_dir(current)
-        .map_err(|error| format!("failed to read directory {}: {}", current.display(), error))?
-    {
-        let entry =
-            entry.map_err(|error| format!("failed to inspect directory entry: {}", error))?;
+fn collect_json_files(current: &Path, files: &mut Vec<PathBuf>) -> Result<(), AppError> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') {
             continue;
         }
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|error| format!("failed to inspect {}: {}", path.display(), error))?;
+        let metadata = fs::symlink_metadata(&path)?;
         if metadata.file_type().is_symlink() {
             continue;
         }
@@ -591,37 +598,29 @@ fn collect_json_files(current: &Path, files: &mut Vec<PathBuf>) -> Result<(), St
     Ok(())
 }
 
-fn read_package_corpus(package_root: &Path) -> Result<String, String> {
+fn read_package_corpus(package_root: &Path) -> Result<String, AppError> {
     let mut corpus = String::new();
     collect_corpus(package_root, package_root, &mut corpus)?;
     Ok(corpus)
 }
 
-fn collect_corpus(package_root: &Path, current: &Path, corpus: &mut String) -> Result<(), String> {
-    for entry in fs::read_dir(current)
-        .map_err(|error| format!("failed to read directory {}: {}", current.display(), error))?
-    {
-        let entry =
-            entry.map_err(|error| format!("failed to inspect directory entry: {}", error))?;
+fn collect_corpus(package_root: &Path, current: &Path, corpus: &mut String) -> Result<(), AppError> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') || name == "notebook.json" || name == "tests" {
             continue;
         }
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|error| format!("failed to inspect {}: {}", path.display(), error))?;
+        let metadata = fs::symlink_metadata(&path)?;
         if metadata.file_type().is_symlink() {
             continue;
         }
         if metadata.is_dir() {
             collect_corpus(package_root, &path, corpus)?;
         } else if metadata.is_file() && is_text_corpus_file(&path) {
-            let content = fs::read_to_string(&path)
-                .map_err(|error| format!("failed to read {}: {}", path.display(), error))?;
-            corpus.push('\n');
-            corpus.push_str(&relative_path(package_root, &path)?);
-            corpus.push('\n');
-            corpus.push_str(&content);
+            let content = fs::read_to_string(&path)?;
+            corpus.push_str(&format!("\n{}\n{}", relative_path(package_root, &path)?, content));
         }
     }
 
@@ -645,21 +644,17 @@ fn is_text_corpus_file(path: &Path) -> bool {
     )
 }
 
-fn contains_regular_file(path: &Path) -> Result<bool, String> {
+fn contains_regular_file(path: &Path) -> Result<bool, AppError> {
     if !path.exists() {
         return Ok(false);
     }
     if path.is_file() {
         return Ok(true);
     }
-    for entry in fs::read_dir(path)
-        .map_err(|error| format!("failed to read directory {}: {}", path.display(), error))?
-    {
-        let entry =
-            entry.map_err(|error| format!("failed to inspect directory entry: {}", error))?;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
         let child = entry.path();
-        let metadata = fs::symlink_metadata(&child)
-            .map_err(|error| format!("failed to inspect {}: {}", child.display(), error))?;
+        let metadata = fs::symlink_metadata(&child)?;
         if metadata.file_type().is_symlink() {
             continue;
         }
@@ -673,10 +668,10 @@ fn contains_regular_file(path: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-fn relative_path(package_root: &Path, path: &Path) -> Result<String, String> {
+fn relative_path(package_root: &Path, path: &Path) -> Result<String, AppError> {
     path.strip_prefix(package_root)
         .map(|value| value.to_string_lossy().replace('\\', "/"))
-        .map_err(|error| format!("failed to compute relative path: {}", error))
+        .map_err(AppError::from)
 }
 
 fn value_has_content(value: &Value) -> bool {
@@ -687,10 +682,6 @@ fn value_has_content(value: &Value) -> bool {
         Value::Object(map) => !map.is_empty(),
         Value::Bool(_) | Value::Number(_) => true,
     }
-}
-
-fn contains_any(value: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| value.contains(needle))
 }
 
 fn expectation_keywords(value: &str) -> Vec<String> {
@@ -728,31 +719,7 @@ mod tests {
     use super::run_package_test;
     use crate::domain::test::PackageTestStatus;
     use crate::storage::filesystem;
-
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn tmp_project_root_path() -> PathBuf {
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "skill-notebook-test-service-{}-{}",
-            std::process::id(),
-            seed
-        ))
-    }
-
-    fn copy_example_project_root(destination: &PathBuf) -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("examples")
-            .join("project-root");
-        filesystem::copy_directory_recursive(&root, destination).expect("copy project root");
-        destination.clone()
-    }
+    use crate::test_helpers::{copy_example_project_root, tmp_project_root_path};
 
     #[test]
     fn runs_package_smoke_tests() {

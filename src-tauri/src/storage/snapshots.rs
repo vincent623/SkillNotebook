@@ -2,49 +2,46 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::storage::filesystem;
+use crate::utils::errors::AppError;
 
 const SNAPSHOT_PREFIX: &str = ".skill-notebook/snapshots";
 
-fn ensure_safe_snapshot_path(snapshot_path: &str) -> Result<(), String> {
+fn ensure_safe_snapshot_path(snapshot_path: &str) -> Result<(), AppError> {
     if Path::new(snapshot_path).is_absolute() {
-        return Err(format!(
+        return Err(AppError::InvalidPath(format!(
             "refusing to operate on absolute snapshot path: {}",
             snapshot_path
-        ));
+        )));
     }
 
     if Path::new(snapshot_path)
         .components()
         .any(|component| matches!(component, std::path::Component::ParentDir))
     {
-        return Err(format!(
+        return Err(AppError::InvalidPath(format!(
             "refusing to operate on snapshot path containing '..': {}",
             snapshot_path
-        ));
+        )));
     }
 
     if snapshot_path.starts_with(SNAPSHOT_PREFIX) {
         return Ok(());
     }
 
-    Err(format!(
+    Err(AppError::InvalidPath(format!(
         "refusing to operate on snapshot path outside {}: {}",
         SNAPSHOT_PREFIX, snapshot_path
-    ))
+    )))
 }
 
-fn copy_directory_filtered(source: &Path, destination: &Path) -> Result<(), String> {
+fn copy_directory_filtered(source: &Path, destination: &Path) -> Result<(), AppError> {
     filesystem::ensure_directory(destination)?;
 
-    for entry in fs::read_dir(source)
-        .map_err(|error| format!("failed to read directory {}: {}", source.display(), error))?
-    {
-        let path = entry
-            .map_err(|error| format!("failed to inspect directory entry: {}", error))?
-            .path();
+    for entry in fs::read_dir(source)? {
+        let path = entry?.path();
         let file_name = path
             .file_name()
-            .ok_or_else(|| format!("missing file name for {}", path.display()))?
+            .ok_or_else(|| AppError::Other(format!("missing file name for {}", path.display())))?
             .to_string_lossy()
             .to_string();
 
@@ -60,14 +57,7 @@ fn copy_directory_filtered(source: &Path, destination: &Path) -> Result<(), Stri
                 filesystem::ensure_directory(parent)?;
             }
 
-            fs::copy(&path, &destination_path).map_err(|error| {
-                format!(
-                    "failed to copy {} to {}: {}",
-                    path.display(),
-                    destination_path.display(),
-                    error
-                )
-            })?;
+            fs::copy(&path, &destination_path)?;
         }
     }
 
@@ -82,7 +72,7 @@ fn should_skip_snapshot_entry(file_name: &str) -> bool {
         || file_name.starts_with('.')
 }
 
-fn resolve_snapshot_root(project_root_path: &Path, snapshot_path: &str) -> Result<PathBuf, String> {
+fn resolve_snapshot_root(project_root_path: &Path, snapshot_path: &str) -> Result<PathBuf, AppError> {
     ensure_safe_snapshot_path(snapshot_path)?;
     Ok(project_root_path.join(snapshot_path))
 }
@@ -90,28 +80,20 @@ fn resolve_snapshot_root(project_root_path: &Path, snapshot_path: &str) -> Resul
 pub fn snapshot_has_restorable_content(
     project_root_path: &Path,
     snapshot_path: &str,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     let snapshot_root = resolve_snapshot_root(project_root_path, snapshot_path)?;
     if !snapshot_root.exists() {
-        return Err(format!(
+        return Err(AppError::Other(format!(
             "snapshot directory does not exist: {}",
             snapshot_root.display()
-        ));
+        )));
     }
 
-    for entry in fs::read_dir(&snapshot_root).map_err(|error| {
-        format!(
-            "failed to read directory {}: {}",
-            snapshot_root.display(),
-            error
-        )
-    })? {
-        let path = entry
-            .map_err(|error| format!("failed to inspect directory entry: {}", error))?
-            .path();
+    for entry in fs::read_dir(&snapshot_root)? {
+        let path = entry?.path();
         let file_name = path
             .file_name()
-            .ok_or_else(|| format!("missing file name for {}", path.display()))?
+            .ok_or_else(|| AppError::Other(format!("missing file name for {}", path.display())))?
             .to_string_lossy()
             .to_string();
 
@@ -125,7 +107,7 @@ pub fn snapshot_has_restorable_content(
     Ok(false)
 }
 
-pub fn collect_snapshot_files(root: &Path) -> Result<Vec<String>, String> {
+pub fn collect_snapshot_files(root: &Path) -> Result<Vec<String>, AppError> {
     let mut files = Vec::new();
     collect_snapshot_files_recursive(root, root, &mut files)?;
     files.sort();
@@ -136,16 +118,12 @@ fn collect_snapshot_files_recursive(
     root: &Path,
     current: &Path,
     files: &mut Vec<String>,
-) -> Result<(), String> {
-    for entry in fs::read_dir(current)
-        .map_err(|error| format!("failed to read directory {}: {}", current.display(), error))?
-    {
-        let path = entry
-            .map_err(|error| format!("failed to inspect directory entry: {}", error))?
-            .path();
+) -> Result<(), AppError> {
+    for entry in fs::read_dir(current)? {
+        let path = entry?.path();
         let file_name = path
             .file_name()
-            .ok_or_else(|| format!("missing file name for {}", path.display()))?
+            .ok_or_else(|| AppError::Other(format!("missing file name for {}", path.display())))?
             .to_string_lossy()
             .to_string();
 
@@ -159,8 +137,7 @@ fn collect_snapshot_files_recursive(
         }
 
         let relative = path
-            .strip_prefix(root)
-            .map_err(|error| format!("failed to compute relative path: {}", error))?
+            .strip_prefix(root)?
             .to_string_lossy()
             .to_string();
         files.push(relative);
@@ -173,20 +150,20 @@ pub fn restore_snapshot(
     project_root_path: &Path,
     package_root: &Path,
     snapshot_path: &str,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let snapshot_root = resolve_snapshot_root(project_root_path, snapshot_path)?;
     if !snapshot_root.exists() {
-        return Err(format!(
+        return Err(AppError::Other(format!(
             "snapshot directory does not exist: {}",
             snapshot_root.display()
-        ));
+        )));
     }
 
     if !snapshot_has_restorable_content(project_root_path, snapshot_path)? {
-        return Err(format!(
+        return Err(AppError::Other(format!(
             "snapshot {} does not contain restorable package files",
             snapshot_path
-        ));
+        )));
     }
 
     clear_package_contents(package_root)?;
@@ -194,20 +171,12 @@ pub fn restore_snapshot(
     Ok(())
 }
 
-fn clear_package_contents(package_root: &Path) -> Result<(), String> {
-    for entry in fs::read_dir(package_root).map_err(|error| {
-        format!(
-            "failed to read directory {}: {}",
-            package_root.display(),
-            error
-        )
-    })? {
-        let path = entry
-            .map_err(|error| format!("failed to inspect directory entry: {}", error))?
-            .path();
+fn clear_package_contents(package_root: &Path) -> Result<(), AppError> {
+    for entry in fs::read_dir(package_root)? {
+        let path = entry?.path();
         let file_name = path
             .file_name()
-            .ok_or_else(|| format!("missing file name for {}", path.display()))?
+            .ok_or_else(|| AppError::Other(format!("missing file name for {}", path.display())))?
             .to_string_lossy()
             .to_string();
 
@@ -216,12 +185,9 @@ fn clear_package_contents(package_root: &Path) -> Result<(), String> {
         }
 
         if path.is_dir() {
-            fs::remove_dir_all(&path).map_err(|error| {
-                format!("failed to remove directory {}: {}", path.display(), error)
-            })?;
+            fs::remove_dir_all(&path)?;
         } else {
-            fs::remove_file(&path)
-                .map_err(|error| format!("failed to remove file {}: {}", path.display(), error))?;
+            fs::remove_file(&path)?;
         }
     }
 
@@ -233,19 +199,13 @@ pub fn snapshot_package(
     package_root: &Path,
     package_id: &str,
     version_number: u32,
-) -> Result<String, String> {
+) -> Result<String, AppError> {
     let snapshot_path = format!("{}/{}/v{}", SNAPSHOT_PREFIX, package_id, version_number);
     ensure_safe_snapshot_path(&snapshot_path)?;
 
     let destination = project_root_path.join(&snapshot_path);
     if destination.exists() {
-        fs::remove_dir_all(&destination).map_err(|error| {
-            format!(
-                "failed to remove existing snapshot directory {}: {}",
-                destination.display(),
-                error
-            )
-        })?;
+        fs::remove_dir_all(&destination)?;
     }
 
     copy_directory_filtered(package_root, &destination)?;
@@ -253,7 +213,7 @@ pub fn snapshot_package(
     Ok(snapshot_path)
 }
 
-pub fn delete_snapshot(project_root_path: &Path, snapshot_path: &str) -> Result<(), String> {
+pub fn delete_snapshot(project_root_path: &Path, snapshot_path: &str) -> Result<(), AppError> {
     ensure_safe_snapshot_path(snapshot_path)?;
 
     let absolute = project_root_path.join(snapshot_path);
@@ -262,23 +222,11 @@ pub fn delete_snapshot(project_root_path: &Path, snapshot_path: &str) -> Result<
     }
 
     if absolute.is_dir() {
-        fs::remove_dir_all(&absolute).map_err(|error| {
-            format!(
-                "failed to delete snapshot directory {}: {}",
-                absolute.display(),
-                error
-            )
-        })?;
+        fs::remove_dir_all(&absolute)?;
         return Ok(());
     }
 
-    fs::remove_file(&absolute).map_err(|error| {
-        format!(
-            "failed to delete snapshot file {}: {}",
-            absolute.display(),
-            error
-        )
-    })?;
+    fs::remove_file(&absolute)?;
     Ok(())
 }
 

@@ -914,32 +914,8 @@ mod tests {
         execute, parse_from, DraftCommand, ExportCommand, ParseOutcome, SkillCli, SkillCommand,
         VersionCommand,
     };
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    use crate::storage::filesystem;
-
-    fn tmp_project_root_path() -> PathBuf {
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "skill-notebook-cli-test-{}-{}",
-            std::process::id(),
-            seed
-        ))
-    }
-
-    fn copy_example_project_root(destination: &PathBuf) -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("examples")
-            .join("project-root");
-        filesystem::copy_directory_recursive(&root, destination).expect("copy project_root");
-        destination.clone()
-    }
+    use crate::test_helpers::{copy_example_project_root, tmp_project_root_path};
 
     #[test]
     fn find_command_lists_packages_as_json() {

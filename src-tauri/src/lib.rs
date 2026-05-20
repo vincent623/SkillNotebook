@@ -7,6 +7,9 @@ pub mod state;
 pub mod storage;
 pub mod utils;
 
+#[cfg(test)]
+mod test_helpers;
+
 use state::app_state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

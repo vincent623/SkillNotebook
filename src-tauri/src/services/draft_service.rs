@@ -8,6 +8,7 @@ use crate::domain::draft::{
 use crate::domain::package::PackageImportResponse;
 use crate::services::package_service;
 use crate::storage::filesystem;
+use crate::utils::errors::AppError;
 use crate::utils::ids::slugify;
 use crate::utils::time::now_iso;
 
@@ -16,7 +17,7 @@ const DEFAULT_AGENT_COMMAND: &str = "codex";
 pub fn start_draft(
     payload: &DraftStartRequest,
     root_path: Option<&str>,
-) -> Result<DraftWorkspace, String> {
+) -> Result<DraftWorkspace, AppError> {
     let project_root_path = filesystem::project_root_for_id(&payload.project_root_id, root_path)?;
     let prompt = payload
         .prompt
@@ -131,19 +132,15 @@ pub fn start_draft(
     Ok(workspace)
 }
 
-pub fn list_drafts(root_path: Option<&str>) -> Result<Vec<DraftWorkspace>, String> {
+pub fn list_drafts(root_path: Option<&str>) -> Result<Vec<DraftWorkspace>, AppError> {
     let scanned = filesystem::scan_project_root(root_path)?;
     let root = drafts_root(Path::new(&scanned.project_root.root_path));
     if !root.exists() {
         return Ok(Vec::new());
     }
     let mut drafts = Vec::new();
-    for entry in fs::read_dir(&root)
-        .map_err(|error| format!("failed to read drafts {}: {}", root.display(), error))?
-    {
-        let path = entry
-            .map_err(|error| format!("failed to inspect draft entry: {}", error))?
-            .path();
+    for entry in fs::read_dir(&root)? {
+        let path = entry?.path();
         if !path.is_dir() {
             continue;
         }
@@ -165,25 +162,24 @@ pub fn list_drafts(root_path: Option<&str>) -> Result<Vec<DraftWorkspace>, Strin
 pub fn discard_draft(
     payload: &DraftDiscardRequest,
     root_path: Option<&str>,
-) -> Result<bool, String> {
+) -> Result<bool, AppError> {
     let project_root_path = filesystem::project_root_for_id(&payload.project_root_id, root_path)?;
     let draft_path = draft_path_for_id(&project_root_path, &payload.draft_id)?;
     if !draft_path.exists() {
         return Ok(false);
     }
-    fs::remove_dir_all(&draft_path)
-        .map_err(|error| format!("failed to discard {}: {}", draft_path.display(), error))?;
+    fs::remove_dir_all(&draft_path)?;
     Ok(true)
 }
 
 pub fn import_draft(
     payload: &DraftImportRequest,
     root_path: Option<&str>,
-) -> Result<DraftImportResponse, String> {
+) -> Result<DraftImportResponse, AppError> {
     let project_root_path = filesystem::project_root_for_id(&payload.project_root_id, root_path)?;
     let draft_path = draft_path_for_id(&project_root_path, &payload.draft_id)?;
     if !draft_path.exists() {
-        return Err(format!("draft not found: {}", payload.draft_id));
+        return Err(AppError::Other(format!("draft not found: {}", payload.draft_id)));
     }
     let manifest = read_draft_manifest(&draft_path)?;
     let PackageImportResponse {
@@ -219,10 +215,10 @@ fn drafts_root(project_root_path: &Path) -> PathBuf {
     project_root_path.join(".skill-notebook").join("drafts")
 }
 
-fn draft_path_for_id(project_root_path: &Path, draft_id: &str) -> Result<PathBuf, String> {
+fn draft_path_for_id(project_root_path: &Path, draft_id: &str) -> Result<PathBuf, AppError> {
     let raw = draft_id.trim();
     if raw.is_empty() {
-        return Err("draft id cannot be empty".to_string());
+        return Err(AppError::Other("draft id cannot be empty".to_string()));
     }
 
     let raw_path = Path::new(raw);
@@ -239,22 +235,22 @@ fn draft_path_for_id(project_root_path: &Path, draft_id: &str) -> Result<PathBuf
     let candidate = normalize_existing_or_lexical_path(&candidate)?;
     let root = normalize_existing_or_lexical_path(&drafts_root(project_root_path))?;
     if !candidate.starts_with(&root) {
-        return Err(format!(
+        return Err(AppError::InvalidPath(format!(
             "draft path must be under {}: {}",
             root.display(),
             raw
-        ));
+        )));
     }
 
     Ok(candidate)
 }
 
-fn normalize_existing_or_lexical_path(path: &Path) -> Result<PathBuf, String> {
+fn normalize_existing_or_lexical_path(path: &Path) -> Result<PathBuf, AppError> {
     let path = normalize_lexical_path(path)?;
     Ok(fs::canonicalize(&path).unwrap_or(path))
 }
 
-fn normalize_lexical_path(path: &Path) -> Result<PathBuf, String> {
+fn normalize_lexical_path(path: &Path) -> Result<PathBuf, AppError> {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
@@ -263,22 +259,20 @@ fn normalize_lexical_path(path: &Path) -> Result<PathBuf, String> {
             Component::CurDir => {}
             Component::Normal(part) => normalized.push(part),
             Component::ParentDir => {
-                return Err(format!(
+                return Err(AppError::InvalidPath(format!(
                     "parent traversal is not allowed: {}",
                     path.display()
-                ))
+                )))
             }
         }
     }
     Ok(normalized)
 }
 
-fn read_draft_manifest(draft_path: &Path) -> Result<DraftWorkspace, String> {
+fn read_draft_manifest(draft_path: &Path) -> Result<DraftWorkspace, AppError> {
     let manifest = draft_path.join("draft.json");
-    let content = fs::read_to_string(&manifest)
-        .map_err(|error| format!("failed to read {}: {}", manifest.display(), error))?;
-    serde_json::from_str(&content)
-        .map_err(|error| format!("failed to parse {}: {}", manifest.display(), error))
+    let content = fs::read_to_string(&manifest)?;
+    Ok(serde_json::from_str(&content)?)
 }
 
 fn build_source_summary(
@@ -388,16 +382,7 @@ description: \"Draft skill package. Use when the workflow has been completed and
 2. Apply the reusable workflow.
 3. Return the agreed output shape.
 ",
-        slug.split('-')
-            .map(|part| {
-                let mut chars = part.chars();
-                match chars.next() {
-                    Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
-                    None => String::new(),
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
+        crate::utils::ids::title_from_slug(slug)
     )
 }
 
@@ -405,32 +390,9 @@ description: \"Draft skill package. Use when the workflow has been completed and
 mod tests {
     use super::{discard_draft, import_draft, list_drafts, start_draft};
     use crate::domain::draft::{DraftDiscardRequest, DraftImportRequest, DraftStartRequest};
-    use crate::storage::filesystem;
+    use crate::test_helpers::{copy_example_project_root, tmp_project_root_path};
 
-    use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn tmp_project_root_path() -> PathBuf {
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "skill-notebook-draft-service-{}-{}",
-            std::process::id(),
-            seed
-        ))
-    }
-
-    fn copy_example_project_root(destination: &PathBuf) -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("examples")
-            .join("project-root");
-        filesystem::copy_directory_recursive(&root, destination).expect("copy project root");
-        destination.clone()
-    }
+    use std::path::Path;
 
     #[test]
     fn start_draft_creates_handoff_workspace() {

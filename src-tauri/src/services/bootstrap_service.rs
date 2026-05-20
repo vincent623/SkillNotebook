@@ -1,8 +1,9 @@
 use crate::domain::common::AppBootstrap;
 use crate::domain::package::PackageStatus;
 use crate::storage::filesystem;
+use crate::utils::errors::AppError;
 
-pub fn build_bootstrap(root_path: Option<&str>) -> Result<AppBootstrap, String> {
+pub fn build_bootstrap(root_path: Option<&str>) -> Result<AppBootstrap, AppError> {
     let scanned = filesystem::scan_project_root(root_path)?;
     let needs_eval_count = scanned
         .packages

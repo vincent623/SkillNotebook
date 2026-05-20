@@ -6,19 +6,20 @@ use crate::domain::package::{
     PackageNotebookDocument, PackageReferenceItem, PackageReferenceItemKind,
     PackageReferenceResponse, PackageStatus, PackageUpdateRequest, SkillPackage,
 };
-use crate::services::eval_service;
+use crate::services::eval_service::{self, EvalParams};
 use crate::storage::filesystem;
+use crate::utils::errors::AppError;
 use crate::utils::ids::slugify;
 use crate::utils::time::now_iso;
 
-pub fn list_packages(root_path: Option<&str>) -> Result<Vec<SkillPackage>, String> {
+pub fn list_packages(root_path: Option<&str>) -> Result<Vec<SkillPackage>, AppError> {
     Ok(filesystem::scan_project_root(root_path)?.packages)
 }
 
 pub fn get_package(
     package_id: &str,
     root_path: Option<&str>,
-) -> Result<Option<SkillPackage>, String> {
+) -> Result<Option<SkillPackage>, AppError> {
     let package = filesystem::scan_project_root(root_path)?
         .packages
         .into_iter()
@@ -30,7 +31,7 @@ pub fn get_package(
 pub fn list_package_files(
     package_id: &str,
     root_path: Option<&str>,
-) -> Result<Vec<PackageFileEntry>, String> {
+) -> Result<Vec<PackageFileEntry>, AppError> {
     let package_root = package_root(package_id, root_path)?;
     filesystem::list_package_file_tree(&package_root)
 }
@@ -39,7 +40,7 @@ pub fn read_package_file(
     package_id: &str,
     path: &str,
     root_path: Option<&str>,
-) -> Result<PackageFileContent, String> {
+) -> Result<PackageFileContent, AppError> {
     let package_root = package_root(package_id, root_path)?;
     filesystem::read_package_text_file(&package_root, path)
 }
@@ -49,7 +50,7 @@ pub fn write_package_file(
     path: &str,
     content: &str,
     root_path: Option<&str>,
-) -> Result<PackageFileContent, String> {
+) -> Result<PackageFileContent, AppError> {
     let package_root = package_root(package_id, root_path)?;
     filesystem::write_package_text_file(&package_root, path, content)
 }
@@ -58,16 +59,16 @@ pub fn update_package(
     package_id: &str,
     payload: &PackageUpdateRequest,
     root_path: Option<&str>,
-) -> Result<SkillPackage, String> {
+) -> Result<SkillPackage, AppError> {
     let package = get_package(package_id, root_path)?
-        .ok_or_else(|| format!("package not found: {}", package_id))?;
+        .ok_or_else(|| AppError::Other(format!("package not found: {}", package_id)))?;
     let package_root = PathBuf::from(&package.root_path);
     let mut notebook = filesystem::load_package_notebook(&package_root)?;
 
     if let Some(name) = payload.name.as_deref() {
         let next_name = name.trim();
         if next_name.is_empty() {
-            return Err("package name cannot be empty".to_string());
+            return Err(AppError::Other("package name cannot be empty".to_string()));
         }
         notebook.name = next_name.to_string();
     }
@@ -91,24 +92,24 @@ pub fn update_package(
     filesystem::save_package_notebook(&package_root, &notebook)?;
 
     get_package(package_id, root_path)?.ok_or_else(|| {
-        format!(
+        AppError::Other(format!(
             "package {} was updated but could not be reloaded from {}",
             package_id,
             package_root.display()
-        )
+        ))
     })
 }
 
 pub fn reference_package(
     package_id: &str,
     root_path: Option<&str>,
-) -> Result<PackageReferenceResponse, String> {
+) -> Result<PackageReferenceResponse, AppError> {
     let scanned = filesystem::scan_project_root(root_path)?;
     let package = scanned
         .packages
         .into_iter()
         .find(|item| item.id == package_id)
-        .ok_or_else(|| format!("package not found: {}", package_id))?;
+        .ok_or_else(|| AppError::Other(format!("package not found: {}", package_id)))?;
     let project_root = scanned.project_root;
     let package_path = package.root_path.clone();
     let skill_md_path = PathBuf::from(&package_path)
@@ -196,7 +197,7 @@ pub fn reference_package(
 pub fn import_package(
     payload: &PackageImportRequest,
     root_path: Option<&str>,
-) -> Result<PackageImportResponse, String> {
+) -> Result<PackageImportResponse, AppError> {
     let project_root_path = filesystem::project_root_for_id(&payload.project_root_id, root_path)?;
     import_package_from_path(
         &project_root_path,
@@ -211,27 +212,26 @@ pub fn import_package_from_path(
     source_path: &str,
     requested_slug: Option<&str>,
     run_eval: bool,
-) -> Result<PackageImportResponse, String> {
+) -> Result<PackageImportResponse, AppError> {
     let source = resolve_source_path(project_root_path, source_path)?;
-    let metadata = fs::symlink_metadata(&source)
-        .map_err(|error| format!("failed to inspect {}: {}", source.display(), error))?;
+    let metadata = fs::symlink_metadata(&source)?;
     if metadata.file_type().is_symlink() {
-        return Err(format!(
+        return Err(AppError::Other(format!(
             "refusing to import symlinked path: {}",
             source.display()
-        ));
+        )));
     }
     if !metadata.is_dir() {
-        return Err(format!(
+        return Err(AppError::Other(format!(
             "import source must be a directory: {}",
             source.display()
-        ));
+        )));
     }
     if !source.join("SKILL.md").exists() {
-        return Err(format!(
+        return Err(AppError::Other(format!(
             "import source has no SKILL.md: {}",
             source.display()
-        ));
+        )));
     }
 
     let skills_root = filesystem::canonical_skills_root(project_root_path);
@@ -272,15 +272,15 @@ pub fn import_package_from_path(
     filesystem::save_package_notebook(&package_root, &notebook)?;
 
     let eval_report = if run_eval {
-        let evaluation = eval_service::evaluate_package(
+        let evaluation = eval_service::evaluate_package(&EvalParams {
             project_root_path,
-            &package_root,
-            &package_id,
-            &slug,
-            &notebook.name,
-            &notebook.description,
-            1,
-        )?;
+            package_root: &package_root,
+            package_id: &package_id,
+            slug: &slug,
+            package_name: &notebook.name,
+            fallback_description: &notebook.description,
+            iteration: 1,
+        })?;
         notebook.last_eval_status = Some(evaluation.report.overall_status.clone());
         notebook.status = evaluation.suggested_status;
         notebook.updated_at = now_iso();
@@ -316,10 +316,8 @@ pub fn import_package_from_path(
     })
 }
 
-fn package_root(package_id: &str, root_path: Option<&str>) -> Result<PathBuf, String> {
-    let package = get_package(package_id, root_path)?
-        .ok_or_else(|| format!("package not found: {}", package_id))?;
-    Ok(PathBuf::from(package.root_path))
+fn package_root(package_id: &str, root_path: Option<&str>) -> Result<PathBuf, AppError> {
+    filesystem::find_package_root_by_id(package_id, root_path)
 }
 
 #[derive(Debug, Clone)]
@@ -329,10 +327,10 @@ struct InferredPackageMetadata {
     tags: Vec<String>,
 }
 
-fn resolve_source_path(project_root_path: &Path, source_path: &str) -> Result<PathBuf, String> {
+fn resolve_source_path(project_root_path: &Path, source_path: &str) -> Result<PathBuf, AppError> {
     let trimmed = source_path.trim();
     if trimmed.is_empty() {
-        return Err("import source path cannot be empty".to_string());
+        return Err(AppError::Other("import source path cannot be empty".to_string()));
     }
     let candidate = PathBuf::from(trimmed);
     let resolved = if candidate.is_absolute() {
@@ -367,23 +365,16 @@ fn unique_slug(skills_root: &Path, base_slug: &str) -> String {
     )
 }
 
-fn copy_import_package(source: &Path, destination: &Path) -> Result<(), String> {
+fn copy_import_package(source: &Path, destination: &Path) -> Result<(), AppError> {
     filesystem::ensure_directory(destination)?;
-    for entry in fs::read_dir(source).map_err(|error| {
-        format!(
-            "failed to read import source {}: {}",
-            source.display(),
-            error
-        )
-    })? {
-        let entry = entry.map_err(|error| format!("failed to inspect import entry: {}", error))?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') || name == "notebook.json" || name == "draft.json" {
             continue;
         }
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|error| format!("failed to inspect {}: {}", path.display(), error))?;
+        let metadata = fs::symlink_metadata(&path)?;
         if metadata.file_type().is_symlink() {
             continue;
         }
@@ -394,14 +385,7 @@ fn copy_import_package(source: &Path, destination: &Path) -> Result<(), String> 
             if let Some(parent) = destination_path.parent() {
                 filesystem::ensure_directory(parent)?;
             }
-            fs::copy(&path, &destination_path).map_err(|error| {
-                format!(
-                    "failed to copy {} to {}: {}",
-                    path.display(),
-                    destination_path.display(),
-                    error
-                )
-            })?;
+            fs::copy(&path, &destination_path)?;
         }
     }
     Ok(())
@@ -410,19 +394,18 @@ fn copy_import_package(source: &Path, destination: &Path) -> Result<(), String> 
 fn infer_package_metadata(
     package_root: &Path,
     slug: &str,
-) -> Result<InferredPackageMetadata, String> {
+) -> Result<InferredPackageMetadata, AppError> {
     let skill_md_path = package_root.join("SKILL.md");
-    let content = fs::read_to_string(&skill_md_path)
-        .map_err(|error| format!("failed to read {}: {}", skill_md_path.display(), error))?;
-    let frontmatter = extract_frontmatter(&content);
+    let content = fs::read_to_string(&skill_md_path)?;
+    let frontmatter = crate::utils::frontmatter::extract(&content);
     let name = frontmatter
         .as_deref()
-        .and_then(|block| extract_frontmatter_value(block, "name"))
+        .and_then(|block| crate::utils::frontmatter::get_value(block, "name"))
         .or_else(|| extract_markdown_title(&content))
         .unwrap_or_else(|| title_from_slug(slug));
     let description = frontmatter
         .as_deref()
-        .and_then(|block| extract_frontmatter_value(block, "description"))
+        .and_then(|block| crate::utils::frontmatter::get_value(block, "description"))
         .or_else(|| first_body_paragraph(&content))
         .unwrap_or_else(|| format!("Imported skill package `{}`.", slug));
     let tags = frontmatter
@@ -437,37 +420,8 @@ fn infer_package_metadata(
     })
 }
 
-fn extract_frontmatter(content: &str) -> Option<String> {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return None;
-    }
-    let mut lines = trimmed.lines();
-    if lines.next()? != "---" {
-        return None;
-    }
-    let mut block = Vec::new();
-    for line in lines {
-        if line.trim() == "---" {
-            return Some(block.join("\n"));
-        }
-        block.push(line.to_string());
-    }
-    None
-}
-
-fn extract_frontmatter_value(block: &str, key: &str) -> Option<String> {
-    let prefix = format!("{}:", key);
-    block.lines().find_map(|line| {
-        let trimmed = line.trim();
-        let value = trimmed.strip_prefix(&prefix)?.trim();
-        Some(value.trim_matches('"').trim_matches('\'').to_string())
-            .filter(|value| !value.trim().is_empty())
-    })
-}
-
 fn extract_frontmatter_tags(block: &str) -> Option<Vec<String>> {
-    let raw = extract_frontmatter_value(block, "tags")?;
+    let raw = crate::utils::frontmatter::get_value(block, "tags")?;
     let tags = raw
         .trim_matches(['[', ']'])
         .split(',')
@@ -498,17 +452,7 @@ fn first_body_paragraph(content: &str) -> Option<String> {
 }
 
 fn title_from_slug(slug: &str) -> String {
-    slug.split('-')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    crate::utils::ids::title_from_slug(slug)
 }
 
 pub fn shell_quote(value: &str) -> String {
@@ -525,14 +469,14 @@ pub fn shell_quote(value: &str) -> String {
     format!("\"{}\"", quoted)
 }
 
-pub fn sanitize_relative_path(relative_path: &str) -> Result<PathBuf, String> {
+pub fn sanitize_relative_path(relative_path: &str) -> Result<PathBuf, AppError> {
     let raw = relative_path.trim();
     if raw.is_empty() {
-        return Err("relative path cannot be empty".to_string());
+        return Err(AppError::Other("relative path cannot be empty".to_string()));
     }
     let candidate = Path::new(raw);
     if candidate.is_absolute() {
-        return Err(format!("absolute paths are not allowed: {}", raw));
+        return Err(AppError::InvalidPath(format!("absolute paths are not allowed: {}", raw)));
     }
     let mut cleaned = PathBuf::new();
     for component in candidate.components() {
@@ -540,10 +484,10 @@ pub fn sanitize_relative_path(relative_path: &str) -> Result<PathBuf, String> {
             Component::Normal(part) => cleaned.push(part),
             Component::CurDir => {}
             Component::ParentDir => {
-                return Err(format!("parent traversal is not allowed: {}", raw))
+                return Err(AppError::InvalidPath(format!("parent traversal is not allowed: {}", raw)))
             }
             Component::RootDir | Component::Prefix(_) => {
-                return Err(format!("absolute paths are not allowed: {}", raw))
+                return Err(AppError::InvalidPath(format!("absolute paths are not allowed: {}", raw)))
             }
         }
     }
@@ -570,32 +514,9 @@ mod tests {
     use super::{import_package_from_path, reference_package, update_package};
     use crate::domain::package::{PackageStatus, PackageUpdateRequest};
     use crate::storage::filesystem;
+    use crate::test_helpers::{copy_example_project_root, tmp_project_root_path};
 
     use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn tmp_project_root_path() -> PathBuf {
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "skill-notebook-package-service-{}-{}",
-            std::process::id(),
-            seed
-        ))
-    }
-
-    fn copy_example_project_root(destination: &PathBuf) -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("examples")
-            .join("project-root");
-        filesystem::copy_directory_recursive(&root, destination).expect("copy project root");
-        destination.clone()
-    }
 
     #[test]
     fn updates_package_notebook_metadata() {
@@ -648,7 +569,7 @@ mod tests {
         )
         .expect_err("empty name should fail");
 
-        assert!(error.contains("name cannot be empty"));
+        assert!(error.to_string().contains("name cannot be empty"));
         std::fs::remove_dir_all(root).ok();
     }
 
